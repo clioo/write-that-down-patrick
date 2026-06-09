@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>WriteThatDown</string>
+	<key>CFBundleDisplayName</key>
+	<string>Write That Down</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.writethatdown.app</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+
+	<!-- Menu-bar only application: no Dock icon, no main window. -->
+	<key>LSUIElement</key>
+	<true/>
+
+	<!-- TCC usage strings. Required so macOS can attribute and display the
+	     permission prompts when capture / transcription start. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Write That Down captures microphone audio to transcribe your calls locally on this Mac. Audio is never sent anywhere.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Write That Down can use the on-device speech recognizer to transcribe call audio. Recognition runs entirely on this Mac.</string>
+	<!-- Screen Recording permission (required by ScreenCaptureKit even for
+	     audio-only capture) is governed by the system Screen Recording TCC
+	     entry; it has no Info.plist usage-string key on macOS 13/14. -->
+</dict>
+</plist>
