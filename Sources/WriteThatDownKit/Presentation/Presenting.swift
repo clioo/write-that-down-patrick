@@ -27,6 +27,10 @@ public protocol Presenting: AnyObject, Sendable {
     /// Trigger the "call detected and started" notification (§5.2, §16.1).
     func notifyCallStarted(session: RecordingSession)
 
+    /// The transcript document was created or renamed; `path` is its current
+    /// absolute location (provisional during recording, final after save).
+    func updateTranscriptPath(_ path: String?)
+
     /// Surface a visible error to the user (§10.2 — never fail silently).
     func presentError(_ message: String)
 }

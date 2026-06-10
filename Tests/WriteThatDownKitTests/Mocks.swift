@@ -179,8 +179,10 @@ final class MockPresenter: Presenting {
     private(set) var captionsShown = false
     private(set) var captionsHidden = false
     private(set) var notifiedStart = 0
+    private(set) var transcriptPaths: [String?] = []
 
     func sessionWillStart(session: RecordingSession) {}
+    func updateTranscriptPath(_ path: String?) { transcriptPaths.append(path) }
     func showCaptions() { captionsShown = true }
     func hideCaptions() { captionsHidden = true }
     func showPartial(_ segment: Segment) { partials.append(segment) }

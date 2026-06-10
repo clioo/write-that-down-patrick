@@ -39,8 +39,35 @@ public actor SessionOrchestrator {
 
     private var finalSegmentCount = 0
     private var inactiveMicTicks = 0
+    /// Consecutive mic-active polls observed while Idle — the "confirm window"
+    /// counter (§5.2). A session starts only once this reaches `requiredStartTicks`.
+    private var pendingStartTicks = 0
     private var permissionsOK = false
     private var didWarnPermission = false
+    /// When the last session-startup failure occurred. While set and within
+    /// `startRetryCooldownMs`, confirmed windows do NOT retry — a persistent
+    /// failure (bad model, capture error) must not churn on every poll.
+    private var lastStartFailureAt: Date?
+    /// Whether the user has already seen a startup-failure error during the
+    /// current continuous mic-active episode. ONE visible error per episode;
+    /// re-armed when the mic is released (a new call may warn once again).
+    private var didWarnStartFailure = false
+
+    /// Number of consecutive mic-active polls required before starting a session.
+    /// The first active poll is only the baseline observation (0 ms of confirmed
+    /// sustained activity); each subsequent consecutive active poll proves one
+    /// more `pollIntervalMs` of it. N ticks therefore prove (N-1)·poll ms, so we
+    /// require `1 + ceil(startConfirmMs / poll)` ticks — guaranteeing at least
+    /// `startConfirmMs` of observed sustained activity. The mic-off grace in the
+    /// `.recording` branch uses the same baseline convention.
+    /// `startConfirmMs == 0` → 1 tick: start on the first mic-on poll.
+    private var requiredStartTicks: Int {
+        let poll = max(1, config.pollIntervalMs)
+        // Overflow-safe integer ceiling division (a Double→Int round-trip traps
+        // for absurd-but-validated values like startConfirmMs = Int.max).
+        let ticks = config.startConfirmMs / poll + (config.startConfirmMs % poll == 0 ? 0 : 1)
+        return 1 + min(ticks, Int.max - 1)
+    }
 
     private let eventContinuation: AsyncStream<Event>.Continuation
     private var eventStream: AsyncStream<Event>?
@@ -87,7 +114,7 @@ public actor SessionOrchestrator {
         detector.start { [weak self] active in
             self?.eventContinuation.yield(.micSample(active))
         }
-        Log.orchestrator.info("Orchestrator observing (permissionsOK=\(self.permissionsOK, privacy: .public)).")
+        Log.orchestrator.notice("Orchestrator observing (permissionsOK=\(self.permissionsOK, privacy: .public)).")
         await run()
     }
 
@@ -117,7 +144,7 @@ public actor SessionOrchestrator {
         for await event in stream {
             await handle(event)
         }
-        Log.orchestrator.info("Orchestrator event loop ended.")
+        Log.orchestrator.notice("Orchestrator event loop ended.")
     }
 
     private func handle(_ event: Event) async {
@@ -142,12 +169,50 @@ public actor SessionOrchestrator {
     private func handleMicSample(_ active: Bool) async {
         switch state.sessionStatus {
         case .idle:
-            guard active else { return }
-            // Refresh permission state — the user may have granted access since
-            // launch. Block session starts until granted (§10.2).
+            guard active else {
+                // Mic released before the confirm window elapsed → it was a brief,
+                // non-meeting blip. Discard it; no session/notification/transcript.
+                // .info (not .debug): this is the only silent no-session path,
+                // and exactly the line needed to field-debug "my call never
+                // started". At most one line per mic release — no spam risk.
+                if pendingStartTicks > 0 {
+                    Log.orchestrator.notice("Mic blip ignored (\(self.pendingStartTicks, privacy: .public)/\(self.requiredStartTicks, privacy: .public) confirm ticks).")
+                }
+                pendingStartTicks = 0
+                // Re-arm the warnings and clear the failure cooldown: the next
+                // sustained-activity episode is a distinct call — it retries
+                // immediately and deserves its own (single) visible error if
+                // still failing (§10.2).
+                didWarnPermission = false
+                didWarnStartFailure = false
+                lastStartFailureAt = nil
+                return
+            }
+            // Mic in use. Require it to stay active for the confirm window before
+            // starting a session, so brief mic use never triggers one (§5.2).
+            // Clamped: while blocked on permissions the counter holds at the
+            // threshold rather than growing unboundedly.
+            pendingStartTicks = min(pendingStartTicks + 1, requiredStartTicks)
+            guard pendingStartTicks >= requiredStartTicks else { return }
+
+            // Confirmed. Refresh permission state — the user may have granted
+            // access since launch. Block session starts until granted (§10.2).
+            // The counter is NOT reset while blocked: the mic is still
+            // continuously active, so a mid-meeting grant starts the session on
+            // the very next poll instead of re-accumulating the confirm window.
             let snapshot = await permissions.currentStatus()
             permissionsOK = snapshot.canStartSession
             if permissionsOK {
+                // Back off after a startup failure: while the mic stays active,
+                // retry at most once per cooldown so a persistently failing
+                // start doesn't churn (and notify) on every confirm window.
+                if let failedAt = lastStartFailureAt {
+                    let sinceMs = now().timeIntervalSince(failedAt) * 1000
+                    if sinceMs < Double(config.startRetryCooldownMs) {
+                        return // counter stays clamped; next poll re-checks
+                    }
+                }
+                pendingStartTicks = 0
                 didWarnPermission = false
                 await beginSession()
             } else if !didWarnPermission {
@@ -160,21 +225,20 @@ public actor SessionOrchestrator {
                 inactiveMicTicks = 0
             } else {
                 inactiveMicTicks += 1
-                let inactiveMs = inactiveMicTicks * config.pollIntervalMs
+                // Baseline convention, same as the confirm window: the first
+                // inactive poll proves 0 ms of mic-off; N ticks prove (N-1)·poll,
+                // so `system_stop` fires only after ≥ micInactivityGraceMs of
+                // observed sustained mic release (§5.3).
+                let inactiveMs = (inactiveMicTicks - 1) * config.pollIntervalMs
                 if inactiveMs >= config.micInactivityGraceMs {
-                    Log.orchestrator.info("Mic inactive \(inactiveMs, privacy: .public) ms → finalize (system_stop).")
+                    Log.orchestrator.notice("Mic inactive \(inactiveMs, privacy: .public) ms → finalize (system_stop).")
                     await finalizeSession(reason: .systemStop)
                     return
                 }
             }
-            // Audio-level inactivity timeout (§7.3).
-            if let last = state.lastAudioActivityAt {
-                let elapsedMs = now().timeIntervalSince(last) * 1000
-                if elapsedMs >= Double(config.inactivityTimeoutMs) {
-                    Log.orchestrator.info("Audio inactive \(Int(elapsedMs), privacy: .public) ms → finalize (inactivity).")
-                    await finalizeSession(reason: .inactivity)
-                }
-            }
+            // Audio-level inactivity timeout (§7.3) — poll-side fallback; the
+            // primary evaluation rides the audio stream in `handleAudio`.
+            _ = await finalizeIfAudioInactive(via: "mic poll")
 
         default:
             // detected / finalizing / saved / failed are transient within the
@@ -201,7 +265,7 @@ public actor SessionOrchestrator {
         state.currentSession = session
         await presenter.updateStatus(.detected, endReason: nil)
         await presenter.sessionWillStart(session: session)
-        Log.orchestrator.info("Session \(id, privacy: .public) detected; starting capture/engine.")
+        Log.orchestrator.notice("Session \(id, privacy: .public) detected; starting capture/engine.")
 
         // 1. Engine (may incur model-load cost, §8.1).
         let engine = makeEngine()
@@ -244,6 +308,7 @@ public actor SessionOrchestrator {
         do {
             let url = try writer.begin(session: session, title: Self.defaultTitle(startedAt), startedAtLocal: startedAt)
             session.transcriptRef = url.path
+            await presenter.updateTranscriptPath(url.path)
         } catch {
             await failStartup(message: "Could not create transcript file: \(error.localizedDescription)",
                               engine: engine, capturer: capturer, writer: nil)
@@ -254,13 +319,18 @@ public actor SessionOrchestrator {
         // Success → Recording (§6.2 Detected -> Recording).
         finalSegmentCount = 0
         inactiveMicTicks = 0
+        // Startup recovered — clear the failure cooldown and re-arm the warning.
+        lastStartFailureAt = nil
+        didWarnStartFailure = false
         state.currentSession = session
-        state.lastAudioActivityAt = startedAt
+        // Seed at recording-ready (NOT `startedAt`): engine/model startup above
+        // can take many seconds and must not eat into the inactivity budget.
+        state.lastAudioActivityAt = now()
         state.sessionStatus = .recording
         await presenter.showCaptions()
         await presenter.updateStatus(.recording, endReason: nil)
         await presenter.notifyCallStarted(session: session)
-        Log.orchestrator.info("Session \(id, privacy: .public) recording.")
+        Log.orchestrator.notice("Session \(id, privacy: .public) recording.")
     }
 
     /// Detected -> Failed (§6.2). Tears down whatever started, returns to Idle,
@@ -275,26 +345,24 @@ public actor SessionOrchestrator {
         Log.orchestrator.error("Session startup failed: \(message, privacy: .public)")
         if let capturer { await capturer.stop() }
         if let engine { _ = try? await engine.stop() }
-        if let writer { _ = try? writer.finalize(duration: 0) }
-
-        if var session = state.currentSession {
-            session.status = .failed
-            session.endReason = .error
-            session.endedAt = now()
-            state.currentSession = session
+        if let writer, let preserved = try? writer.finalize(duration: 0) {
+            await presenter.updateTranscriptPath(preserved.path)
         }
+
         self.engine = nil
         self.capturer = nil
         self.writer = nil
-        state.sessionStatus = .failed
-        await presenter.hideCaptions()
-        await presenter.updateStatus(.failed, endReason: .error)
-        await presenter.presentError(message)
 
-        // Failed -> Idle (§6.2): resume observing.
-        state.sessionStatus = .idle
-        state.currentSession = nil
-        inactiveMicTicks = 0
+        // Start the retry cooldown and surface the error AT MOST ONCE per
+        // continuous mic-active episode — a persistent failure must not pop an
+        // alert/notification on every confirm window (the failure is always
+        // logged above and reflected in the menu-bar status regardless).
+        lastStartFailureAt = now()
+        let surface = !didWarnStartFailure
+        didWarnStartFailure = true
+
+        await presenter.hideCaptions()
+        await failToIdle(message: message, surfaceError: surface)
     }
 
     // MARK: Transcription loop (§14.3)
@@ -304,6 +372,11 @@ public actor SessionOrchestrator {
 
         if buffer.rms >= config.activityThresholdRMS {
             state.lastAudioActivityAt = now()
+        } else if await finalizeIfAudioInactive(via: "audio stream") {
+            // Primary silence-timeout evaluation rides the audio stream — the
+            // signal actually being measured (§7.3) — so it fires within one
+            // buffer interval of the deadline instead of waiting for a mic poll.
+            return
         }
 
         let segments: [Segment]
@@ -340,21 +413,15 @@ public actor SessionOrchestrator {
         Log.persistence.error("Persistence failure during recording: \(error.localizedDescription)")
         await capturer?.stop(); capturer = nil
         _ = try? await engine?.stop(); engine = nil
-        _ = try? writer?.finalize(duration: currentElapsed()); writer = nil
-
-        if var session = state.currentSession {
-            session.status = .failed
-            session.endReason = .error
-            session.endedAt = now()
-            state.currentSession = session
+        // finalize() may rename the file; publish the preserved location so the
+        // popover's reveal/copy actions don't point at the old provisional path.
+        if let preserved = try? writer?.finalize(duration: currentElapsed()) {
+            await presenter.updateTranscriptPath(preserved.path)
         }
-        state.sessionStatus = .failed
+        writer = nil
+
         await presenter.hideCaptions()
-        await presenter.updateStatus(.failed, endReason: .error)
-        await presenter.presentError("Could not write transcript: \(error.localizedDescription). Partial transcript preserved.")
-        state.sessionStatus = .idle
-        state.currentSession = nil
-        inactiveMicTicks = 0
+        await failToIdle(message: "Could not write transcript: \(error.localizedDescription). Partial transcript preserved.")
     }
 
     // MARK: Session finalization (§5.3, §14.4)
@@ -363,7 +430,7 @@ public actor SessionOrchestrator {
         guard state.sessionStatus == .recording else { return }
         state.sessionStatus = .finalizing
         await presenter.updateStatus(.finalizing, endReason: reason)
-        Log.orchestrator.info("Finalizing session (reason=\(reason.rawValue, privacy: .public)).")
+        Log.orchestrator.notice("Finalizing session (reason=\(reason.rawValue, privacy: .public)).")
 
         // Stop capture first so no further buffers arrive.
         await capturer?.stop(); capturer = nil
@@ -401,18 +468,7 @@ public actor SessionOrchestrator {
 
         if !finalizeOK {
             // Finalizing -> Failed (§6.2 / §10.2). Partial content is preserved.
-            if var session = state.currentSession {
-                session.status = .failed
-                session.endReason = .error
-                session.endedAt = now()
-                state.currentSession = session
-            }
-            state.sessionStatus = .failed
-            await presenter.updateStatus(.failed, endReason: .error)
-            await presenter.presentError("Could not finalize the transcript. Partial content preserved.")
-            state.sessionStatus = .idle
-            state.currentSession = nil
-            inactiveMicTicks = 0
+            await failToIdle(message: "Could not finalize the transcript. Partial content preserved.")
             return
         }
 
@@ -422,19 +478,58 @@ public actor SessionOrchestrator {
             session.endReason = reason
             session.status = .saved
             if let finalURL { session.transcriptRef = finalURL.path }
+            if let finalURL { await presenter.updateTranscriptPath(finalURL.path) }
             state.currentSession = session
         }
         state.sessionStatus = .saved
         await presenter.updateStatus(.saved, endReason: reason)
 
         // Saved -> Idle (§6.2): return to observing.
-        state.sessionStatus = .idle
-        state.currentSession = nil
-        inactiveMicTicks = 0
-        Log.orchestrator.info("Session saved → idle.")
+        resetToIdle()
+        Log.orchestrator.notice("Session saved → idle.")
     }
 
     // MARK: Helpers
+
+    /// Evaluates the audio-silence timeout (§7.3) against `lastAudioActivityAt`,
+    /// finalizing with `end_reason = inactivity` when exceeded. Returns true if
+    /// the session was finalized. Called from both the audio stream (primary)
+    /// and the mic poll (fallback) so the timeout policy lives in one place.
+    private func finalizeIfAudioInactive(via source: String) async -> Bool {
+        guard state.sessionStatus == .recording, let last = state.lastAudioActivityAt else { return false }
+        let elapsedMs = now().timeIntervalSince(last) * 1000
+        guard elapsedMs >= Double(config.inactivityTimeoutMs) else { return false }
+        Log.orchestrator.notice("Audio inactive \(Int(elapsedMs), privacy: .public) ms (\(source, privacy: .public)) → finalize (inactivity).")
+        await finalizeSession(reason: .inactivity)
+        return true
+    }
+
+    /// Returns the orchestrator to observing (… -> Idle, §6.2).
+    private func resetToIdle() {
+        state.sessionStatus = .idle
+        state.currentSession = nil
+        inactiveMicTicks = 0
+    }
+
+    /// Common Failed -> Idle tail (§6.2, §10.2): mark the session failed,
+    /// surface a visible error, then resume observing. Callers hide the caption
+    /// surface beforehand. `surfaceError: false` suppresses only the user-facing
+    /// error (used by the once-per-episode startup-failure gating); the status
+    /// surface still flips to `.failed` and the failure is always logged.
+    private func failToIdle(message: String, surfaceError: Bool = true) async {
+        if var session = state.currentSession {
+            session.status = .failed
+            session.endReason = .error
+            session.endedAt = now()
+            state.currentSession = session
+        }
+        state.sessionStatus = .failed
+        await presenter.updateStatus(.failed, endReason: .error)
+        if surfaceError {
+            await presenter.presentError(message)
+        }
+        resetToIdle()
+    }
 
     private func currentElapsed() -> TimeInterval {
         guard let session = state.currentSession else { return 0 }
