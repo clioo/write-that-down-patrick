@@ -12,17 +12,29 @@ private final class ResultBox: @unchecked Sendable {
 }
 
 enum EngineSelfTest {
+    /// Self-test a LOCAL model folder (no download).
     static func run(modelFolder: String) -> Never {
         let folder = AppConfiguration.expandTilde(modelFolder)
-        FileHandle.standardError.write(Data("[self-test] loading WhisperKit model from: \(folder.path)\n".utf8))
+        run(model: folder.lastPathComponent, modelFolder: folder, label: "loading WhisperKit model from: \(folder.path)")
+    }
+
+    /// Download a model variant by name (one-time) into WhisperKit's cache, then
+    /// self-test it. Exercises the exact path the app uses when no local folder
+    /// is configured. Invoked via `WriteThatDown --download-model <name>`.
+    static func runDownload(model: String) -> Never {
+        run(model: model, modelFolder: nil, label: "downloading + loading WhisperKit model '\(model)' (one-time)…")
+    }
+
+    private static func run(model: String, modelFolder: URL?, label: String) -> Never {
+        FileHandle.standardError.write(Data("[self-test] \(label)\n".utf8))
 
         let engine = WhisperKitEngine()
         let engineConfig = EngineConfig(
             language: "en",
             sampleRate: 16_000,
             windowSeconds: 2,
-            model: folder.lastPathComponent,
-            modelFolder: folder
+            model: model,
+            modelFolder: modelFolder
         )
 
         let semaphore = DispatchSemaphore(value: 0)
@@ -33,7 +45,7 @@ enum EngineSelfTest {
                 let t0 = Date()
                 try await engine.start(engineConfig)
                 let load = Date().timeIntervalSince(t0)
-                FileHandle.standardError.write(Data(String(format: "[self-test] model loaded in %.1fs (no download)\n", load).utf8))
+                FileHandle.standardError.write(Data(String(format: "[self-test] model ready in %.1fs\n", load).utf8))
 
                 // ~3 s of audible-level noise to exercise the inference path.
                 var samples = [Float](repeating: 0, count: 16_000 * 3)
@@ -50,7 +62,7 @@ enum EngineSelfTest {
         semaphore.wait()
 
         if result.ok {
-            print("[self-test] OK — engine loads and transcribes fully offline.")
+            print("[self-test] OK — engine loads and transcribes.")
             exit(0)
         } else {
             print("[self-test] FAILED")

@@ -4,3 +4,4 @@
 DerivedData/
 WriteThatDown.app/
 .DS_Store
+.claude/settings.local.json
