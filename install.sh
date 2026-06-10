@@ -32,8 +32,24 @@ cp "$BIN_PATH" "$BUILD_APP/Contents/MacOS/$APP_NAME"
 cp "$SCRIPT_DIR/Info.plist" "$BUILD_APP/Contents/Info.plist"
 printf 'APPL????' > "$BUILD_APP/Contents/PkgInfo"
 
-echo "==> Ad-hoc code-signing (required for stable TCC permission grants)…"
-codesign --force --sign - --timestamp=none "$BUILD_APP"
+# Prefer a real signing identity: ad-hoc signatures get a new identity every
+# build, so macOS resets the app's Microphone/Screen-Recording grants on every
+# reinstall. With a stable identity (e.g. a self-signed "WriteThatDown Dev"
+# cert, or any Apple Development cert), permissions stick across updates.
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+  | grep -oE '"[^"]+"' | tr -d '"' \
+  | grep -m1 -E 'WriteThatDown|Apple Development|Developer ID Application|Mac Developer|iPhone Developer' || true)
+if [[ -n "${IDENTITY:-}" ]]; then
+  echo "==> Code-signing with stable identity: $IDENTITY"
+  codesign --force --sign "$IDENTITY" --timestamp=none "$BUILD_APP"
+else
+  echo "==> Ad-hoc code-signing (no signing identity found)."
+  echo "    NOTE: macOS will RESET Microphone/Screen-Recording grants on every"
+  echo "    reinstall. To fix permanently, create a self-signed code-signing"
+  echo "    cert named 'WriteThatDown Dev' in Keychain Access (Certificate"
+  echo "    Assistant → Create a Certificate → type: Code Signing), then re-run."
+  codesign --force --sign - --timestamp=none "$BUILD_APP"
+fi
 codesign --verify --verbose "$BUILD_APP"
 
 echo "==> Installing to $DEST …"

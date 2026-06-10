@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let environment = try AppEnvironment()
             self.environment = environment
             Task { await environment.run() }
-            Log.app.info("Write That Down launched.")
+            Log.app.notice("Write That Down launched.")
         } catch {
             // Invalid configuration is a hard, visible failure before any
             // operation starts (§11).
@@ -31,5 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Re-opening the app (Spotlight, Finder, `open`) while it's already
+    /// running re-shows the dashboard window instead of doing nothing.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        environment?.showMainWindow()
+        return false
     }
 }

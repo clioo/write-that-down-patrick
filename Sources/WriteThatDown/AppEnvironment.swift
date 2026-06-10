@@ -38,18 +38,29 @@ final class AppEnvironment {
             permissions: permissions
         )
 
-        Log.app.info("Configured: engine=\(cfg.engine.rawValue, privacy: .public), outputDir=\(cfg.outputDir.path, privacy: .public).")
+        Log.app.notice("Configured: engine=\(cfg.engine.rawValue, privacy: .public), outputDir=\(cfg.outputDir.path, privacy: .public).")
     }
 
-    /// Requests permissions on first launch (§12), installs the UI, then starts
-    /// the orchestrator's event loop (this call does not return until shutdown).
+    /// Installs the UI FIRST (the menu-bar icon must appear even if a TCC
+    /// permission prompt stalls unanswered), then requests permissions (§12)
+    /// and starts the orchestrator's event loop (does not return until shutdown).
     func run() async {
-        _ = await permissions.requestAll()
-        await presenter.install()
-
+        // Wire EVERYTHING synchronous first — engine info and the popover's
+        // Stop/Quit actions must work the instant the icon appears, even while
+        // a permission prompt is stalled unanswered.
         let orchestrator = self.orchestrator
         presenter.onManualStop = { orchestrator.requestManualStop() }
         presenter.onQuit = { orchestrator.requestShutdown() }
+        presenter.setEngineInfo(
+            engineName: config.engine == .native ? "Apple Speech (on-device)" : "WhisperKit (local)",
+            modelName: config.engine == .native ? "macOS dictation model" : config.whisperModel,
+            modelDetail: AppEnvironment.modelLocationDetail(for: config)
+        )
+        await presenter.install()
+        // The app is not menu-bar-only: show the dashboard window on launch
+        // (and AppDelegate re-shows it when the user re-opens the app).
+        presenter.showMainWindow()
+        _ = await permissions.requestAll()
 
         // Returns only once the event loop ends (after `requestShutdown()` has
         // finalized any in-progress session); then terminate the app.
@@ -57,17 +68,100 @@ final class AppEnvironment {
         NSApp.terminate(nil)
     }
 
+    /// Re-shows the dashboard window (user re-opened the app while running).
+    func showMainWindow() {
+        presenter.showMainWindow()
+    }
+
     // MARK: - Configuration loading (defaults + environment overrides)
 
     /// Builds configuration from §11 defaults, then applies (in increasing
-    /// precedence) a JSON config file and environment variables. The config file
-    /// is the durable mechanism for GUI launches, which do not inherit `WTD_*`
-    /// env vars.
+    /// precedence) the JSON config file and `WTD_*` environment variables. The
+    /// config file is the durable mechanism for GUI launches, which do not
+    /// inherit env vars. Override SEMANTICS (tilde expansion, engine parsing,
+    /// empty-string rejection) live in `ConfigOverrides`/`applying(_:)` in the
+    /// Kit, where they are unit-tested; this layer only does the I/O.
     static func loadConfiguration() -> AppConfiguration {
         var config = AppConfiguration.default
-        applyConfigFile(&config)     // file overrides built-in defaults
-        applyEnvironment(&config)    // env overrides file
+
+        // 1. Config file (overrides built-in defaults). A MISSING file is the
+        //    normal case; a file that exists but fails to parse must not be
+        //    silently ignored — the user wrote it expecting it to apply.
+        let url = configFileURL
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                let data = try Data(contentsOf: url)
+                let overrides = try ConfigOverrides.decode(fromJSON: data)
+                let (applied, warnings) = config.applying(overrides)
+                config = applied
+                warn(warnings, source: url.path)
+                Log.app.notice("Applied config file at \(url.path, privacy: .public).")
+            } catch {
+                Log.app.error("Config file at \(url.path, privacy: .public) is invalid and was IGNORED: \(error.localizedDescription, privacy: .public)")
+                FileHandle.standardError.write(Data("warning: invalid config file ignored (\(url.path)): \(error.localizedDescription)\n".utf8))
+            }
+        }
+
+        // 2. Environment (overrides the file).
+        let (envOverrides, parseWarnings) = ConfigOverrides.fromEnvironment(ProcessInfo.processInfo.environment)
+        let (applied, applyWarnings) = config.applying(envOverrides)
+        config = applied
+        warn(parseWarnings + applyWarnings, source: "environment")
         return config
+    }
+
+    /// Human-readable description of where the model will load from and whether
+    /// it is actually usable — surfaces the Git-LFS-pointer trap directly in
+    /// the menu-bar popover instead of failing at first call.
+    static func modelLocationDetail(for config: AppConfiguration) -> String {
+        if config.engine == .native { return "Built into macOS — no download" }
+
+        func weightsStatus(at folder: URL) -> String? {
+            guard FileManager.default.fileExists(atPath: folder.path) else { return nil }
+            var total: Int64 = 0
+            var fileCount = 0
+            var enumerationFailed = false
+            let enumerator = FileManager.default.enumerator(
+                at: folder,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [],
+                errorHandler: { _, _ in enumerationFailed = true; return true }
+            )
+            var sampleWeightFile: URL?
+            if let files = enumerator {
+                for case let f as URL in files {
+                    fileCount += 1
+                    total += Int64((try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    if f.lastPathComponent == "weight.bin", sampleWeightFile == nil { sampleWeightFile = f }
+                }
+            }
+            if enumerationFailed || fileCount == 0 {
+                // Denied/empty enumeration must not masquerade as a diagnosis.
+                return "Model folder present — could not verify contents"
+            }
+            // Real CoreML weights are tens of MB minimum.
+            if total > 5_000_000 {
+                let mb = Double(total) / 1_048_576
+                return String(format: "On disk · %.0f MB · loads offline", mb)
+            }
+            // Tiny total: check for the literal Git LFS pointer signature before
+            // claiming stubs; otherwise just report what we see.
+            if let wf = sampleWeightFile,
+               let head = try? FileHandle(forReadingFrom: wf).read(upToCount: 40),
+               String(data: head, encoding: .utf8)?.hasPrefix("version https://git-lfs") == true {
+                return "⚠️ Folder holds Git LFS pointer stubs, not weights"
+            }
+            return "⚠️ Folder exists but looks incomplete (only \(fileCount) small files)"
+        }
+
+        if let folder = config.whisperModelFolder {
+            return weightsStatus(at: folder) ?? "⚠️ Configured folder not found: \(folder.path)"
+        }
+        // Default download cache used by WhisperKit.
+        let cache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/huggingface/models/argmaxinc/whisperkit-coreml")
+            .appendingPathComponent(config.whisperModel)
+        return weightsStatus(at: cache) ?? "Not downloaded yet — fetched once on first call"
     }
 
     /// `~/Library/Application Support/WriteThatDown/config.json`
@@ -78,54 +172,12 @@ final class AppEnvironment {
         return base.appendingPathComponent("WriteThatDown/config.json", isDirectory: false)
     }
 
-    /// Optional JSON config; all keys optional. Mirrors the env-var overrides.
-    private struct FileConfig: Decodable {
-        var outputDir: String?
-        var language: String?
-        var engine: String?
-        var inactivityTimeoutMs: Int?
-        var pollIntervalMs: Int?
-        var whisperModel: String?
-        var whisperModelFolder: String?
-    }
-
-    private static func applyConfigFile(_ config: inout AppConfiguration) {
-        let url = configFileURL
-        guard let data = try? Data(contentsOf: url),
-              let file = try? JSONDecoder().decode(FileConfig.self, from: data)
-        else { return }
-        if let v = file.outputDir, !v.isEmpty { config.outputDir = AppConfiguration.expandTilde(v) }
-        if let v = file.language, !v.isEmpty { config.language = v }
-        if let v = file.engine, let e = EngineKind(rawValue: v) { config.engine = e }
-        if let v = file.inactivityTimeoutMs { config.inactivityTimeoutMs = v }
-        if let v = file.pollIntervalMs { config.pollIntervalMs = v }
-        if let v = file.whisperModel, !v.isEmpty { config.whisperModel = v }
-        if let v = file.whisperModelFolder, !v.isEmpty { config.whisperModelFolder = AppConfiguration.expandTilde(v) }
-        Log.app.info("Applied config file at \(url.path, privacy: .public).")
-    }
-
-    private static func applyEnvironment(_ config: inout AppConfiguration) {
-        let env = ProcessInfo.processInfo.environment
-        if let dir = env["WTD_OUTPUT_DIR"], !dir.isEmpty {
-            config.outputDir = AppConfiguration.expandTilde(dir)
-        }
-        if let lang = env["WTD_LANGUAGE"], !lang.isEmpty {
-            config.language = lang
-        }
-        if let engineRaw = env["WTD_ENGINE"], let engine = EngineKind(rawValue: engineRaw) {
-            config.engine = engine
-        }
-        if let raw = env["WTD_INACTIVITY_TIMEOUT_MS"], let value = Int(raw) {
-            config.inactivityTimeoutMs = value
-        }
-        if let raw = env["WTD_POLL_INTERVAL_MS"], let value = Int(raw) {
-            config.pollIntervalMs = value
-        }
-        if let model = env["WTD_WHISPER_MODEL"], !model.isEmpty {
-            config.whisperModel = model
-        }
-        if let folder = env["WTD_WHISPER_MODEL_FOLDER"], !folder.isEmpty {
-            config.whisperModelFolder = AppConfiguration.expandTilde(folder)
+    /// Surfaces override warnings (unknown engine string, unparsable integer)
+    /// loudly — log + stderr — instead of dropping values silently.
+    private static func warn(_ warnings: [String], source: String) {
+        for warning in warnings {
+            Log.app.warning("Config (\(source, privacy: .public)): \(warning, privacy: .public)")
+            FileHandle.standardError.write(Data("warning: config (\(source)): \(warning)\n".utf8))
         }
     }
 }
