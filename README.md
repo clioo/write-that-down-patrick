@@ -90,6 +90,47 @@ Component → spec mapping:
 | Configuration (typed, validated) | `Configuration/AppConfiguration.swift` | §11 |
 | Permissions | `Permissions/*.swift` | §10.1, §12 |
 
+### Meeting begin / ongoing / end detection
+
+- **Begin** — `CallDetector` polls the OS "mic in use by any process" signal every
+  `poll_interval_ms`. To avoid treating brief, non-meeting mic use (Siri,
+  dictation, a notification, a device switch) as a meeting, a session starts only
+  after the signal stays active for at least `start_confirm_ms` (the **confirm
+  window**: `1 + ⌈start_confirm_ms / poll_interval_ms⌉` consecutive polls — the
+  first poll is the baseline observation, each further poll proves one interval
+  of sustained activity). Briefer blips are discarded with no session,
+  notification, or transcript. If permissions are missing when a window
+  confirms, the window is *held* — granting access mid-meeting starts the
+  session on the very next poll. (Trade-off: capture opens at confirmation, so
+  roughly the first `start_confirm_ms` of audio isn't recorded. Set
+  `start_confirm_ms: 0` to start instantly on mic-on.)
+- **Ongoing** — while recording it keeps one session, mixing mic + system audio
+  and transcribing in rolling chunks. The inactivity clock starts when recording
+  is actually ready (model load time doesn't count against it).
+- **End** — `mic released for ≥ mic_inactivity_grace_ms` → `system_stop`; audio
+  below the activity threshold for `inactivity_timeout_ms` → `inactivity`
+  (evaluated on the audio stream itself, with the mic poll as fallback); or the
+  menu-bar **Stop** → `manual`.
+
+### Live captions (the reading pane)
+
+The floating captions panel is built for following a meeting, not just glancing:
+
+- **Follow-mode scrolling** — pinned to the live edge while you're at the
+  bottom. Scroll up to re-read something and auto-scroll *pauses* (new lines
+  never yank the view); a **"Jump to live ↓"** pill returns you to the
+  conversation.
+- **Full-session scrollback** — the whole conversation stays in the panel
+  (rendered lazily), not just the last few lines.
+- **Resizable + remembered** — drag it into a tall reading pane; size and
+  position persist across sessions and launches.
+- **Text size** — A−/A＋ buttons (persisted), monospaced `[HH:MM:SS]` stamps,
+  selectable text.
+- **Elapsed-meeting timer** in the header, and a **copy button** for the
+  transcript-so-far.
+- **Show/Hide Captions** from the menu-bar popover mid-meeting — hiding the
+  panel never touches the session; the transcript keeps writing.
+
 ### Single-writer, race-free orchestration
 
 `SessionOrchestrator` is a Swift `actor` and the **only** component that mutates
@@ -150,7 +191,8 @@ variables**, then **validated before any operation starts**
 (`AppConfiguration.validated()`); an invalid value shows an error and quits. The
 config file is `~/Library/Application Support/WriteThatDown/config.json` (keys:
 `outputDir`, `language`, `engine`, `inactivityTimeoutMs`, `pollIntervalMs`,
-`whisperModel`, `whisperModelFolder` — all optional). Env vars override the file:
+`startConfirmMs`, `startRetryCooldownMs`, `whisperModel`, `whisperModelFolder` —
+all optional). Env vars override the file:
 
 | Setting | Env var | Default | Notes |
 | --- | --- | --- | --- |
@@ -159,6 +201,8 @@ config file is `~/Library/Application Support/WriteThatDown/config.json` (keys:
 | `engine` | `WTD_ENGINE` | `default` | `default` (WhisperKit) or `native` (SFSpeech) |
 | `inactivity_timeout_ms` | `WTD_INACTIVITY_TIMEOUT_MS` | `900000` (15 min) | §7.3 |
 | `poll_interval_ms` | `WTD_POLL_INTERVAL_MS` | `2000` | §5.1 |
+| `start_confirm_ms` | `WTD_START_CONFIRM_MS` | `3000` | confirm window (§5.2); `0` = start immediately |
+| `start_retry_cooldown_ms` | `WTD_START_RETRY_COOLDOWN_MS` | `60000` | retry backoff after a failed session start; `0` = retry every window |
 | WhisperKit model | `WTD_WHISPER_MODEL` | `base` | e.g. `tiny`, `base`, `small` |
 | WhisperKit model folder | `WTD_WHISPER_MODEL_FOLDER` | _(none)_ | local model dir → fully offline, no download |
 
@@ -261,11 +305,34 @@ shown, and the app keeps observing (it never crashes silently). Grant access in
 
 ---
 
+## Logs & crash reports
+
+The app logs through `os.Logger` (subsystem `com.writethatdown.app`) — nothing
+ever leaves the device. Use the bundled helper:
+
+```bash
+./logs.sh                  # everything from the last hour
+./logs.sh errors 6h        # errors/faults only
+./logs.sh detection 30m    # why did/didn't a call start or stop
+./logs.sh stream           # live tail while reproducing an issue
+./logs.sh crashes          # list crash reports (~/Library/Logs/DiagnosticReports)
+./logs.sh crash            # print the newest crash report
+./logs.sh persist          # sudo: keep .info logs across reboots for post-mortems
+```
+
+Startup failures (engine/capture/transcript could not initialize) surface **one**
+error notification per mic episode and retry at most every
+`start_retry_cooldown_ms` (default 60 s; cleared the moment the mic is
+released, so a new call retries immediately). The failure is always logged and
+reflected in the menu-bar status regardless.
+
 ## Tests (§15)
 
-`swift test` runs the deterministic *Core Conformance* suite (32 tests), covering:
+`swift test` runs the deterministic *Core Conformance* suite, covering:
 
-- Detection & state: Idle→Recording on mic-active; no second session while
+- Detection & state: Idle→Recording on mic-active; confirm window ignores brief
+  mic blips (incl. rounding boundaries); a permission grant mid-meeting starts
+  on the next poll without a new window; no second session while
   recording; manual stop → `manual`; sustained audio-inactivity → `inactivity`;
   sustained mic-off → `system_stop`.
 - Engine contract: partials shown but **not** written; finals written with
