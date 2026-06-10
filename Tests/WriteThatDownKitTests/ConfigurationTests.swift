@@ -52,6 +52,15 @@ final class ConfigurationTests: XCTestCase {
         XCTAssertThrowsError(try c.validated())
     }
 
+    func testStartConfirmDefaultAndValidation() throws {
+        XCTAssertEqual(AppConfiguration.default.startConfirmMs, 3_000)
+        var c = AppConfiguration.default
+        c.startConfirmMs = 0 // allowed: start immediately on mic-on
+        XCTAssertNoThrow(try c.validated())
+        c.startConfirmMs = -1
+        XCTAssertThrowsError(try c.validated())
+    }
+
     func testEngineKindRawValues() {
         XCTAssertEqual(EngineKind(rawValue: "default"), .default)
         XCTAssertEqual(EngineKind(rawValue: "native"), .native)

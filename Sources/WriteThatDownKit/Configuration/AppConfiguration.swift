@@ -24,6 +24,9 @@ public enum EngineKind: String, Sendable, CaseIterable {
 ///   inactivity detection (0.005, ≈ −46 dBFS).
 /// - `micInactivityGraceMs`: how long the mic-in-use signal must stay inactive
 ///   before a session ends with `system_stop` (4000 ms).
+/// - `startConfirmMs`: how long the mic-in-use signal must stay active before a
+///   session starts — the "confirm window" that ignores brief, non-meeting mic
+///   use (3000 ms). 0 = start immediately on mic-on.
 public struct AppConfiguration: Sendable, Equatable {
 
     // MARK: Spec-defined (§11)
@@ -45,6 +48,20 @@ public struct AppConfiguration: Sendable, Equatable {
     public var captureBufferSeconds: Double
     public var transcriptionWindowSeconds: Double
     public var micInactivityGraceMs: Int
+    /// How long the microphone-in-use signal must remain active before a session
+    /// actually starts (the "confirm window", §5.2). Brief mic use shorter than
+    /// this — Siri, dictation, a notification, a device switch — is ignored and
+    /// never creates a session, notification, or transcript. Enforced as
+    /// `1 + ceil(startConfirmMs / pollIntervalMs)` consecutive active polls (the
+    /// first poll is the baseline), guaranteeing at least this much observed
+    /// sustained activity. Set to 0 to start immediately on mic-on.
+    public var startConfirmMs: Int
+    /// Minimum time between session-START attempts after a startup failure
+    /// (engine/capture/writer could not initialize). Prevents a persistent
+    /// failure from churning — and notifying — on every confirm window while
+    /// the mic stays active. The cooldown clears when the mic is released
+    /// (a new call retries immediately). 0 = retry on every confirm window.
+    public var startRetryCooldownMs: Int
 
     /// WhisperKit model variant for the default engine (e.g. "base", "small").
     public var whisperModel: String
@@ -65,6 +82,8 @@ public struct AppConfiguration: Sendable, Equatable {
         captureBufferSeconds: Double = 0.1,
         transcriptionWindowSeconds: Double = 2.0,
         micInactivityGraceMs: Int = 4_000,
+        startConfirmMs: Int = 3_000,
+        startRetryCooldownMs: Int = 60_000,
         whisperModel: String = "base",
         whisperModelFolder: URL? = nil
     ) {
@@ -78,6 +97,8 @@ public struct AppConfiguration: Sendable, Equatable {
         self.captureBufferSeconds = captureBufferSeconds
         self.transcriptionWindowSeconds = transcriptionWindowSeconds
         self.micInactivityGraceMs = micInactivityGraceMs
+        self.startConfirmMs = startConfirmMs
+        self.startRetryCooldownMs = startRetryCooldownMs
         self.whisperModel = whisperModel
         self.whisperModelFolder = whisperModelFolder
     }
@@ -114,6 +135,12 @@ public struct AppConfiguration: Sendable, Equatable {
         }
         if micInactivityGraceMs <= 0 {
             throw ConfigurationError.nonPositive(field: "mic_inactivity_grace_ms", value: micInactivityGraceMs)
+        }
+        if startConfirmMs < 0 {
+            throw ConfigurationError.outOfRange(field: "start_confirm_ms", value: Double(startConfirmMs))
+        }
+        if startRetryCooldownMs < 0 {
+            throw ConfigurationError.outOfRange(field: "start_retry_cooldown_ms", value: Double(startRetryCooldownMs))
         }
         if sampleRate <= 0 {
             throw ConfigurationError.outOfRange(field: "sample_rate", value: sampleRate)
