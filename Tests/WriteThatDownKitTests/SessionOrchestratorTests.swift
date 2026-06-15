@@ -398,6 +398,46 @@ final class SessionOrchestratorTests: XCTestCase {
         orchestrator.requestShutdown(); _ = await task.value
     }
 
+    func testSecondMeetingIsDetectedAfterFirstSessionSaves() async {
+        let detector = MockMicSignalSource()
+        let capturer = MockAudioCapturer()
+        let engine = MockTranscriptionEngine()
+        let writer = MockTranscriptWriter()
+        let presenter = await makePresenter()
+        let permissions = MockPermissions(canStart: true)
+        let clock = TestClock()
+
+        // Realistic shape: 3-tick confirm window, small mic-off grace.
+        let (orchestrator, task) = await startOrchestrator(
+            config: config(pollMs: 50, graceMs: 100, startConfirmMs: 100),
+            detector: detector, capturer: capturer, engine: engine,
+            writer: writer, presenter: presenter, permissions: permissions, clock: clock)
+
+        // ── Meeting 1: confirm window → recording.
+        detector.emit(true); detector.emit(true); detector.emit(true)
+        var recording = await TestSupport.waitUntil { await orchestrator.snapshot().sessionStatus == .recording }
+        XCTAssertTrue(recording, "meeting 1 starts")
+
+        // Mic released, sustained → system_stop → Saved → Idle.
+        detector.emit(false); detector.emit(false); detector.emit(false); detector.emit(false)
+        let idle = await TestSupport.waitUntil { await orchestrator.snapshot().sessionStatus == .idle }
+        XCTAssertTrue(idle, "meeting 1 saved and back to observing")
+        var startCount = await engine.startCount
+        XCTAssertEqual(startCount, 1)
+
+        // A quiet gap between meetings (mic stays off).
+        detector.emit(false); detector.emit(false)
+
+        // ── Meeting 2: mic active again → MUST start a new session.
+        detector.emit(true); detector.emit(true); detector.emit(true)
+        recording = await TestSupport.waitUntil { await orchestrator.snapshot().sessionStatus == .recording }
+        XCTAssertTrue(recording, "meeting 2 must be detected after meeting 1 saved")
+        startCount = await engine.startCount
+        XCTAssertEqual(startCount, 2, "a second engine session must start")
+
+        orchestrator.requestShutdown(); _ = await task.value
+    }
+
     func testSecondSessionNotStartedWhileRecording() async {
         let detector = MockMicSignalSource()
         let capturer = MockAudioCapturer()

@@ -2,7 +2,6 @@ import Foundation
 import AVFoundation
 import Speech
 import CoreGraphics
-import UserNotifications
 
 /// Concrete `PermissionChecking` talking to the real OS permission systems:
 /// microphone (AVFoundation), system-audio/screen-recording (CoreGraphics TCC),
@@ -11,17 +10,22 @@ import UserNotifications
 public final class SystemPermissionManager: PermissionChecking, @unchecked Sendable {
 
     private let requiresSpeech: Bool
-    private let isBundled = Bundle.main.bundlePath.hasSuffix(".app")
 
     public init(requiresSpeech: Bool) {
         self.requiresSpeech = requiresSpeech
     }
 
     public func currentStatus() async -> PermissionSnapshot {
+        // NOTE: deliberately does NOT query UNUserNotificationCenter. This
+        // method runs on the orchestrator's serial event loop before every
+        // session start; notificationSettings() is async-XPC and has been
+        // observed to hang, which would stall the loop forever and stop ALL
+        // further call detection. Notifications never gate `canStartSession`
+        // anyway — authorization is requested once via NotificationService.
         PermissionSnapshot(
             microphone: Self.map(AVCaptureDevice.authorizationStatus(for: .audio)),
             screenCapture: CGPreflightScreenCaptureAccess() ? .granted : .denied,
-            notifications: await notificationStatus(),
+            notifications: .notRequired,
             speech: requiresSpeech ? Self.map(SFSpeechRecognizer.authorizationStatus()) : .notRequired
         )
     }
@@ -66,14 +70,4 @@ public final class SystemPermissionManager: PermissionChecking, @unchecked Senda
         }
     }
 
-    private func notificationStatus() async -> PermissionStatus {
-        guard isBundled else { return .notRequired }
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral: return .granted
-        case .denied: return .denied
-        case .notDetermined: return .notDetermined
-        @unknown default: return .denied
-        }
-    }
 }
