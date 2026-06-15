@@ -12,6 +12,8 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
     public var pollIntervalMs: Int?
     public var startConfirmMs: Int?
     public var startRetryCooldownMs: Int?
+    /// REPLACES the default exclusion list when present.
+    public var excludedApps: [String]?
     public var whisperModel: String?
     public var whisperModelFolder: String?
 
@@ -23,6 +25,7 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
         pollIntervalMs: Int? = nil,
         startConfirmMs: Int? = nil,
         startRetryCooldownMs: Int? = nil,
+        excludedApps: [String]? = nil,
         whisperModel: String? = nil,
         whisperModelFolder: String? = nil
     ) {
@@ -33,6 +36,7 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
         self.pollIntervalMs = pollIntervalMs
         self.startConfirmMs = startConfirmMs
         self.startRetryCooldownMs = startRetryCooldownMs
+        self.excludedApps = excludedApps
         self.whisperModel = whisperModel
         self.whisperModelFolder = whisperModelFolder
     }
@@ -67,6 +71,9 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
             pollIntervalMs: int("WTD_POLL_INTERVAL_MS"),
             startConfirmMs: int("WTD_START_CONFIRM_MS"),
             startRetryCooldownMs: int("WTD_START_RETRY_COOLDOWN_MS"),
+            excludedApps: env["WTD_EXCLUDED_APPS"].map { raw in
+                raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            },
             whisperModel: env["WTD_WHISPER_MODEL"],
             whisperModelFolder: env["WTD_WHISPER_MODEL_FOLDER"]
         )
@@ -102,6 +109,7 @@ extension AppConfiguration {
         if let v = overrides.pollIntervalMs { config.pollIntervalMs = v }
         if let v = overrides.startConfirmMs { config.startConfirmMs = v }
         if let v = overrides.startRetryCooldownMs { config.startRetryCooldownMs = v }
+        if let v = overrides.excludedApps { config.excludedBundleIDs = v }
         if let v = overrides.whisperModel, !v.isEmpty {
             config.whisperModel = v
         }
