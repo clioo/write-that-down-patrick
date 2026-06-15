@@ -25,7 +25,10 @@ final class AppEnvironment {
 
         self.permissions = SystemPermissionManager(requiresSpeech: config.engine == .native)
         self.presenter = PresentationCoordinator(outputDir: config.outputDir)
-        self.detector = CallDetector(pollIntervalMs: config.pollIntervalMs)
+        self.detector = CallDetector(
+            pollIntervalMs: config.pollIntervalMs,
+            excludedBundleIDs: config.excludedBundleIDs
+        )
 
         let cfg = config
         self.orchestrator = SessionOrchestrator(
