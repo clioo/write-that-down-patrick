@@ -484,8 +484,11 @@ public actor SessionOrchestrator {
         state.sessionStatus = .saved
         await presenter.updateStatus(.saved, endReason: reason)
 
-        // Saved -> Idle (§6.2): return to observing.
+        // Saved -> Idle (§6.2): return to observing — and SHOW it. Without the
+        // .idle update the UI stays frozen on "Saved" and the user can't tell
+        // the app is still watching for the next call.
         resetToIdle()
+        await presenter.updateStatus(.idle, endReason: reason)
         Log.orchestrator.notice("Session saved → idle.")
     }
 
@@ -529,6 +532,9 @@ public actor SessionOrchestrator {
             await presenter.presentError(message)
         }
         resetToIdle()
+        // Back to observing — reflect it in the UI (the failure detail stays
+        // visible in the engine-health line and the notification).
+        await presenter.updateStatus(.idle, endReason: .error)
     }
 
     private func currentElapsed() -> TimeInterval {
