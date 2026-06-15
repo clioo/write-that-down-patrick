@@ -144,6 +144,41 @@ final class ConfigOverridesTests: XCTestCase {
         XCTAssertEqual(warnings.count, 1)
     }
 
+    // MARK: - Excluded apps (call-detection exclusion list)
+
+    func testDefaultExclusionsCoverTerminals() {
+        let defaults = AppConfiguration.default.excludedBundleIDs
+        XCTAssertTrue(defaults.contains("dev.warp.Warp-Stable"))
+        XCTAssertTrue(defaults.contains("com.mitchellh.ghostty"))
+        XCTAssertTrue(defaults.contains("com.apple.Terminal"))
+        XCTAssertFalse(defaults.isEmpty)
+    }
+
+    func testExcludedAppsDecodeFromJSON() throws {
+        let o = try ConfigOverrides.decode(fromJSON: Data(#"{"excludedApps": ["com.example.one", "com.example.two"]}"#.utf8))
+        XCTAssertEqual(o.excludedApps, ["com.example.one", "com.example.two"])
+    }
+
+    func testExcludedAppsFromEnvCommaSeparated() {
+        let (o, warnings) = ConfigOverrides.fromEnvironment(
+            ["WTD_EXCLUDED_APPS": " com.example.a , com.example.b ,, "])
+        XCTAssertTrue(warnings.isEmpty)
+        XCTAssertEqual(o.excludedApps, ["com.example.a", "com.example.b"], "trims whitespace, drops empties")
+    }
+
+    func testExcludedAppsOverrideReplacesDefaults() {
+        let base = AppConfiguration.default
+        let (c, warnings) = base.applying(ConfigOverrides(excludedApps: ["com.only.this"]))
+        XCTAssertTrue(warnings.isEmpty)
+        XCTAssertEqual(c.excludedBundleIDs, ["com.only.this"], "override REPLACES the default list")
+    }
+
+    func testExcludedAppsAbsentKeepsDefaults() {
+        let base = AppConfiguration.default
+        let (c, _) = base.applying(ConfigOverrides())
+        XCTAssertEqual(c.excludedBundleIDs, AppConfiguration.defaultExcludedBundleIDs)
+    }
+
     // MARK: - Precedence (defaults < file < environment)
 
     func testEnvironmentBeatsFile() {
