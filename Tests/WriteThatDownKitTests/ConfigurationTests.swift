@@ -66,4 +66,29 @@ final class ConfigurationTests: XCTestCase {
         XCTAssertEqual(EngineKind(rawValue: "native"), .native)
         XCTAssertNil(EngineKind(rawValue: "bogus"))
     }
+
+    func testTranscriptionEngineOptionFromWhisperConfig() {
+        var c = AppConfiguration.default
+        c.whisperModel = "openai_whisper-tiny"
+        c.whisperModelFolder = URL(fileURLWithPath: "/tmp/openai_whisper-tiny")
+
+        let option = TranscriptionEngineOption.from(c)
+
+        XCTAssertEqual(option.engine, .default)
+        XCTAssertEqual(option.id, "whisper:/tmp/openai_whisper-tiny")
+        XCTAssertEqual(option.title, "WhisperKit tiny")
+        XCTAssertEqual(option.whisperModel, "openai_whisper-tiny")
+        XCTAssertEqual(option.whisperModelFolder?.path, "/tmp/openai_whisper-tiny")
+    }
+
+    func testTranscriptionEngineOptionFromNativeConfig() {
+        var c = AppConfiguration.default
+        c.engine = .native
+
+        let option = TranscriptionEngineOption.from(c)
+
+        XCTAssertEqual(option.id, "native")
+        XCTAssertEqual(option.engine, .native)
+        XCTAssertEqual(option.title, "Apple Speech")
+    }
 }

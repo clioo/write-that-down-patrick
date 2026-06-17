@@ -9,10 +9,14 @@ import CoreGraphics
 /// engine is selected). Used to gate session starts (§10.2, §12).
 public final class SystemPermissionManager: PermissionChecking, @unchecked Sendable {
 
-    private let requiresSpeech: Bool
+    private let requiresSpeechProvider: @Sendable () -> Bool
 
     public init(requiresSpeech: Bool) {
-        self.requiresSpeech = requiresSpeech
+        self.requiresSpeechProvider = { requiresSpeech }
+    }
+
+    public init(requiresSpeech: @escaping @Sendable () -> Bool) {
+        self.requiresSpeechProvider = requiresSpeech
     }
 
     public func currentStatus() async -> PermissionSnapshot {
@@ -26,7 +30,7 @@ public final class SystemPermissionManager: PermissionChecking, @unchecked Senda
             microphone: Self.map(AVCaptureDevice.authorizationStatus(for: .audio)),
             screenCapture: CGPreflightScreenCaptureAccess() ? .granted : .denied,
             notifications: .notRequired,
-            speech: requiresSpeech ? Self.map(SFSpeechRecognizer.authorizationStatus()) : .notRequired
+            speech: requiresSpeechProvider() ? Self.map(SFSpeechRecognizer.authorizationStatus()) : .notRequired
         )
     }
 
@@ -42,7 +46,7 @@ public final class SystemPermissionManager: PermissionChecking, @unchecked Senda
         _ = CGRequestScreenCaptureAccess()
 
         // Speech (only when the native engine needs it).
-        if requiresSpeech, SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+        if requiresSpeechProvider(), SFSpeechRecognizer.authorizationStatus() == .notDetermined {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 SFSpeechRecognizer.requestAuthorization { _ in c.resume() }
             }

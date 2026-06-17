@@ -8,6 +8,7 @@
 #   orchestrator  session lifecycle (start/finalize/end reasons/failures)
 #   capture       ScreenCaptureKit + AVAudioEngine
 #   engine        WhisperKit / SFSpeech transcription
+#   metrics       latency/backlog diagnostics (no transcript text)
 #   persistence   transcript writing/finalize
 #   presentation  captions/menu-bar/notifications, user-visible errors
 #   permissions   TCC state
@@ -17,6 +18,7 @@
 #   ./logs.sh                      # everything from the last hour
 #   ./logs.sh recent 30m           # everything from the last 30 minutes
 #   ./logs.sh errors [window]      # errors/faults only
+#   ./logs.sh metrics [window]     # latency/backlog metrics only
 #   ./logs.sh detection [window]   # detection + orchestrator (why didn't my call start/stop?)
 #   ./logs.sh stream               # live tail (Ctrl-C to stop)
 #   ./logs.sh crashes              # list crash reports
@@ -38,8 +40,11 @@ case "$CMD" in
     # messageType 16 = Error, 17 = Fault
     log show --predicate "subsystem == \"$SUBSYSTEM\" AND messageType IN {16, 17}" --last "$WINDOW"
     ;;
+  metrics)
+    log show --predicate "subsystem == \"$SUBSYSTEM\" AND process == \"$APP_NAME\" AND category == \"metrics\"" --last "$WINDOW"
+    ;;
   detection)
-    log show --predicate "subsystem == \"$SUBSYSTEM\" AND category IN {\"detection\", \"orchestrator\"}" --info --last "$WINDOW"
+    log show --predicate "subsystem == \"$SUBSYSTEM\" AND process == \"$APP_NAME\" AND category IN {\"detection\", \"orchestrator\"}" --info --last "$WINDOW"
     ;;
   stream)
     echo "Streaming $SUBSYSTEM logs (Ctrl-C to stop)…" >&2

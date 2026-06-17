@@ -43,6 +43,8 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
     private var committedSeconds: TimeInterval = 0
     private var lastPartialAtSeconds: Double = 0
     private var finalIndex = 0
+    private var inferenceCount = 0
+    private var maxInferenceMs = 0
 
     public init() {}
 
@@ -50,6 +52,8 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         self.language = config.language
         self.sampleRate = config.sampleRate
         self.partialThrottleSeconds = max(0.5, config.windowSeconds / 2)
+        self.inferenceCount = 0
+        self.maxInferenceMs = 0
 
         let wkConfig = WhisperKitConfig(
             model: config.model,
@@ -65,6 +69,9 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
             throw EngineError.initializationFailed(error.localizedDescription)
         }
         Log.engine.info("WhisperKitEngine started (model=\(config.model, privacy: .public)).")
+        Log.metrics.notice(
+            "whisper_start model=\(config.model, privacy: .public) language=\(config.language, privacy: .public) language_auto=\((config.language.lowercased() == "auto"), privacy: .public) partial_throttle_ms=\(Int(self.partialThrottleSeconds * 1000), privacy: .public)"
+        )
     }
 
     public func push(_ buffer: AudioBuffer) async throws -> [Segment] {
@@ -90,7 +97,7 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
 
         if duration - lastPartialAtSeconds >= partialThrottleSeconds {
             lastPartialAtSeconds = duration
-            let text = try await transcribe(pending)
+            let text = try await transcribe(pending, reason: "partial")
             return text.isEmpty ? [] : [Segment(index: -1, timestamp: committedSeconds, text: text, isFinal: false)]
         }
         return []
@@ -104,7 +111,7 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         guard whisperKit != nil else { return [] }
         if rms(pending) >= speechRMS {
             let duration = Double(pending.count) / sampleRate
-            let text = try await transcribe(pending)
+            let text = try await transcribe(pending, reason: "flush")
             if !text.isEmpty {
                 let seg = Segment(index: finalIndex, timestamp: committedSeconds, text: text, isFinal: true)
                 finalIndex += 1
@@ -120,7 +127,7 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
     // MARK: - Internals
 
     private func commit(duration: Double) async throws -> [Segment] {
-        let text = try await transcribe(pending)
+        let text = try await transcribe(pending, reason: "final")
         var out: [Segment] = []
         if !text.isEmpty {
             out.append(Segment(index: finalIndex, timestamp: committedSeconds, text: text, isFinal: true))
@@ -132,9 +139,11 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         return out
     }
 
-    private func transcribe(_ samples: [Float]) async throws -> String {
+    private func transcribe(_ samples: [Float], reason: String) async throws -> String {
         guard let whisperKit, !samples.isEmpty else { return "" }
         let isAuto = language.lowercased() == "auto"
+        let audioMs = Int((Double(samples.count) / sampleRate) * 1000)
+        let started = Date()
         let options = DecodingOptions(
             verbose: false,
             task: .transcribe,
@@ -146,8 +155,19 @@ public final class WhisperKitEngine: TranscriptionEngine, @unchecked Sendable {
         do {
             let results = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
             let text = results.map { $0.text }.joined(separator: " ")
-            return Self.clean(text)
+            let cleaned = Self.clean(text)
+            let elapsedMs = max(0, Int(Date().timeIntervalSince(started) * 1000))
+            inferenceCount += 1
+            maxInferenceMs = max(maxInferenceMs, elapsedMs)
+            Log.metrics.notice(
+                "whisper_inference reason=\(reason, privacy: .public) audio_ms=\(audioMs, privacy: .public) elapsed_ms=\(elapsedMs, privacy: .public) max_elapsed_ms=\(self.maxInferenceMs, privacy: .public) inference_count=\(self.inferenceCount, privacy: .public) language_auto=\(isAuto, privacy: .public) result_chars=\(cleaned.count, privacy: .public)"
+            )
+            return cleaned
         } catch {
+            let elapsedMs = max(0, Int(Date().timeIntervalSince(started) * 1000))
+            Log.metrics.error(
+                "whisper_inference_failed reason=\(reason, privacy: .public) audio_ms=\(audioMs, privacy: .public) elapsed_ms=\(elapsedMs, privacy: .public) language_auto=\(isAuto, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
             throw EngineError.transcriptionFailed(error.localizedDescription)
         }
     }

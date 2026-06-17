@@ -146,8 +146,11 @@ final class ConfigOverridesTests: XCTestCase {
 
     // MARK: - Excluded apps (call-detection exclusion list)
 
-    func testDefaultExclusionsCoverTerminals() {
+    func testDefaultExclusionsCoverTerminalsAndSystemAudioHelpers() {
         let defaults = AppConfiguration.default.excludedBundleIDs
+        XCTAssertTrue(defaults.contains("com.writethatdown.app"))
+        XCTAssertTrue(defaults.contains("com.apple.CoreSpeech"))
+        XCTAssertTrue(defaults.contains("com.apple.replayd"))
         XCTAssertTrue(defaults.contains("dev.warp.Warp-Stable"))
         XCTAssertTrue(defaults.contains("com.mitchellh.ghostty"))
         XCTAssertTrue(defaults.contains("com.apple.Terminal"))

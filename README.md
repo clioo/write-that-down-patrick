@@ -95,9 +95,12 @@ Component → spec mapping:
 - **Which apps count** — on macOS 14+ mic use is attributed to the owning
   process (CoreAudio process objects), and apps on the `excludedApps` list —
   terminals, editors, by default — never trigger a recording, so voice commands
-  to coding agents are ignored. Find any app's bundle ID while it's using the
-  mic with `WriteThatDown --who-uses-mic`. Our own capture never counts. On
-  macOS 13 detection falls back to device-level (no attribution/exclusions).
+  to coding agents are ignored. OS speech helpers (`com.apple.CoreSpeech`),
+  ScreenCaptureKit's replay daemon (`com.apple.replayd`), and this app's own
+  bundle ID are also ignored so ambient system services and our own capture
+  plumbing never look like calls. Find any app's bundle ID while it's using the
+  mic with `WriteThatDown --who-uses-mic`. On macOS 13 detection falls back to
+  device-level (no attribution/exclusions).
 - **Begin** — `CallDetector` polls the OS "mic in use by any process" signal every
   `poll_interval_ms`. To avoid treating brief, non-meeting mic use (Siri,
   dictation, a notification, a device switch) as a meeting, a session starts only

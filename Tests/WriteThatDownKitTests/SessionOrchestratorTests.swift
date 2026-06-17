@@ -39,7 +39,7 @@ final class SessionOrchestratorTests: XCTestCase {
             config: config,
             detector: detector,
             makeCapturer: { capturer },
-            makeEngine: { engine },
+            makeEngine: { _ in engine },
             makeWriter: { writer },
             presenter: presenter,
             permissions: permissions,

@@ -70,9 +70,14 @@ public struct AppConfiguration: Sendable, Equatable {
     /// config file/env REPLACES this list.
     public var excludedBundleIDs: [String]
 
-    /// Default exclusions: terminals, editors with embedded terminals, and
-    /// the app itself can never trigger (filtered by PID, not this list).
+    /// Default exclusions: terminals/editors with embedded terminals, OS speech
+    /// capture helpers, ScreenCaptureKit's replay daemon, and this app's own
+    /// bundle ID. Calls in real meeting apps still count; ambient system services
+    /// and our own capture plumbing do not.
     public static let defaultExcludedBundleIDs: [String] = [
+        "com.writethatdown.app",
+        "com.apple.CoreSpeech",
+        "com.apple.replayd",
         "com.apple.Terminal",
         "dev.warp.Warp-Stable",
         "com.mitchellh.ghostty",
