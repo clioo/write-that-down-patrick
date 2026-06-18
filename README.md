@@ -92,6 +92,15 @@ Component → spec mapping:
 
 ### Meeting begin / ongoing / end detection
 
+- **Which apps count** — on macOS 14+ mic use is attributed to the owning
+  process (CoreAudio process objects), and apps on the `excludedApps` list —
+  terminals, editors, by default — never trigger a recording, so voice commands
+  to coding agents are ignored. OS speech helpers (`com.apple.CoreSpeech`),
+  ScreenCaptureKit's replay daemon (`com.apple.replayd`), and this app's own
+  bundle ID are also ignored so ambient system services and our own capture
+  plumbing never look like calls. Find any app's bundle ID while it's using the
+  mic with `WriteThatDown --who-uses-mic`. On macOS 13 detection falls back to
+  device-level (no attribution/exclusions).
 - **Begin** — `CallDetector` polls the OS "mic in use by any process" signal every
   `poll_interval_ms`. To avoid treating brief, non-meeting mic use (Siri,
   dictation, a notification, a device switch) as a meeting, a session starts only
@@ -203,6 +212,7 @@ all optional). Env vars override the file:
 | `poll_interval_ms` | `WTD_POLL_INTERVAL_MS` | `2000` | §5.1 |
 | `start_confirm_ms` | `WTD_START_CONFIRM_MS` | `3000` | confirm window (§5.2); `0` = start immediately |
 | `start_retry_cooldown_ms` | `WTD_START_RETRY_COOLDOWN_MS` | `60000` | retry backoff after a failed session start; `0` = retry every window |
+| `excludedApps` | `WTD_EXCLUDED_APPS` (comma-sep) | terminals & dev tools | bundle IDs whose mic use never counts as a call (macOS 14+); REPLACES the default list |
 | WhisperKit model | `WTD_WHISPER_MODEL` | `base` | e.g. `tiny`, `base`, `small` |
 | WhisperKit model folder | `WTD_WHISPER_MODEL_FOLDER` | _(none)_ | local model dir → fully offline, no download |
 

@@ -62,6 +62,35 @@ public struct AppConfiguration: Sendable, Equatable {
     /// the mic stays active. The cooldown clears when the mic is released
     /// (a new call retries immediately). 0 = retry on every confirm window.
     public var startRetryCooldownMs: Int
+    /// Bundle IDs whose microphone use must NOT count as a call (compared
+    /// case-insensitively). Defaults cover terminals and dev tools, so voice
+    /// commands to coding agents (Warp/Ghostty/VS Code dictation, etc.) don't
+    /// trigger recordings. Per-app attribution requires macOS 14+; on macOS 13
+    /// detection falls back to "any mic in use". Setting `excludedApps` in the
+    /// config file/env REPLACES this list.
+    public var excludedBundleIDs: [String]
+
+    /// Default exclusions: terminals/editors with embedded terminals, OS speech
+    /// capture helpers, ScreenCaptureKit's replay daemon, and this app's own
+    /// bundle ID. Calls in real meeting apps still count; ambient system services
+    /// and our own capture plumbing do not.
+    public static let defaultExcludedBundleIDs: [String] = [
+        "com.writethatdown.app",
+        "com.apple.CoreSpeech",
+        "com.apple.replayd",
+        "com.apple.Terminal",
+        "dev.warp.Warp-Stable",
+        "com.mitchellh.ghostty",
+        "com.googlecode.iterm2",
+        "net.kovidgoyal.kitty",
+        "org.alacritty",
+        "com.github.wez.wezterm",
+        "co.zeit.hyper",
+        "com.microsoft.VSCode",
+        "com.todesktop.230313mzl4w4u92", // Cursor
+        "com.exafunction.windsurf",
+        "com.anthropic.claudefordesktop",
+    ]
 
     /// WhisperKit model variant for the default engine (e.g. "base", "small").
     public var whisperModel: String
@@ -84,6 +113,7 @@ public struct AppConfiguration: Sendable, Equatable {
         micInactivityGraceMs: Int = 4_000,
         startConfirmMs: Int = 3_000,
         startRetryCooldownMs: Int = 60_000,
+        excludedBundleIDs: [String] = AppConfiguration.defaultExcludedBundleIDs,
         whisperModel: String = "base",
         whisperModelFolder: URL? = nil
     ) {
@@ -99,6 +129,7 @@ public struct AppConfiguration: Sendable, Equatable {
         self.micInactivityGraceMs = micInactivityGraceMs
         self.startConfirmMs = startConfirmMs
         self.startRetryCooldownMs = startRetryCooldownMs
+        self.excludedBundleIDs = excludedBundleIDs
         self.whisperModel = whisperModel
         self.whisperModelFolder = whisperModelFolder
     }

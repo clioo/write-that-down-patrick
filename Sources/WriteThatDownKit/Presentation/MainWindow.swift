@@ -17,6 +17,7 @@ public final class MainWindowController {
     var onStop: () -> Void = {}
     var onToggleCaptions: () -> Void = {}
     var onOpenFolder: () -> Void = {}
+    var onSelectEngineOption: (String) -> Void = { _ in }
     var onQuit: () -> Void = {}
 
     public init(statusModel: StatusModel, captionModel: CaptionModel) {
@@ -42,6 +43,7 @@ public final class MainWindowController {
                 onStop: { [weak self] in self?.onStop() },
                 onToggleCaptions: { [weak self] in self?.onToggleCaptions() },
                 onOpenFolder: { [weak self] in self?.onOpenFolder() },
+                onSelectEngineOption: { [weak self] id in self?.onSelectEngineOption(id) },
                 onQuit: { [weak self] in self?.onQuit() }
             )
         )
@@ -68,6 +70,7 @@ private struct MainWindowView: View {
     var onStop: () -> Void
     var onToggleCaptions: () -> Void
     var onOpenFolder: () -> Void
+    var onSelectEngineOption: (String) -> Void
     var onQuit: () -> Void
 
     var body: some View {
@@ -79,6 +82,7 @@ private struct MainWindowView: View {
                 onStop: onStop,
                 onToggleCaptions: onToggleCaptions,
                 onOpenFolder: onOpenFolder,
+                onSelectEngineOption: onSelectEngineOption,
                 onQuit: onQuit
             )
             .frame(width: 300, alignment: .top)

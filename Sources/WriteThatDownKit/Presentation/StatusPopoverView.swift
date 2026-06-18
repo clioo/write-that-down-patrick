@@ -34,6 +34,8 @@ public final class StatusModel: ObservableObject {
     @Published public var engineName = ""
     @Published public var modelName = ""
     @Published public var modelDetail = ""
+    @Published public var engineOptions: [TranscriptionEngineOption] = []
+    @Published public var selectedEngineOptionID = ""
     @Published public var engineHealth: EngineHealth = .untested
 
     /// Where transcripts are written (folder), for the open/copy actions.
@@ -43,6 +45,16 @@ public final class StatusModel: ObservableObject {
 
     /// Whether a manual stop is meaningful right now.
     public var canStop: Bool { status == .recording }
+
+    /// Engine/model changes apply to the next session, so keep them out of the
+    /// middle of a live recording/finalize.
+    public var canChangeEngine: Bool {
+        status == .idle || status == .saved || status == .failed
+    }
+
+    public var selectedEngineOption: TranscriptionEngineOption? {
+        engineOptions.first { $0.id == selectedEngineOptionID }
+    }
 
     /// The captions toggle is available during a live session AND while idle
     /// with content still in the model (user wants to re-read / copy).
@@ -69,6 +81,7 @@ struct StatusPopoverView: View {
     var onStop: () -> Void
     var onToggleCaptions: () -> Void
     var onOpenFolder: () -> Void
+    var onSelectEngineOption: (String) -> Void
     var onQuit: () -> Void
 
     @State private var pathCopied = false
@@ -161,6 +174,20 @@ struct StatusPopoverView: View {
 
     private var engineSection: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if !model.engineOptions.isEmpty {
+                Picker("Transcription", selection: Binding(
+                    get: { model.selectedEngineOptionID },
+                    set: { onSelectEngineOption($0) }
+                )) {
+                    ForEach(model.engineOptions) { option in
+                        Text(option.title).tag(option.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .labelsHidden()
+                .disabled(!model.canChangeEngine || model.engineOptions.count < 2)
+            }
             HStack(spacing: 6) {
                 Image(systemName: "cpu")
                     .font(.system(size: 11))

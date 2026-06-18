@@ -24,8 +24,9 @@ public actor SessionOrchestrator {
     private let config: AppConfiguration
     private let detector: MicSignalSource
     private let makeCapturer: @Sendable () -> AudioCapturing
-    private let makeEngine: @Sendable () -> TranscriptionEngine
+    private let makeEngine: @Sendable (EngineKind) -> TranscriptionEngine
     private let makeWriter: @Sendable () -> TranscriptWriting
+    private let engineSelection: @Sendable () -> TranscriptionEngineOption
     private let presenter: any Presenting
     private let permissions: PermissionChecking
     private let now: @Sendable () -> Date
@@ -52,6 +53,12 @@ public actor SessionOrchestrator {
     /// current continuous mic-active episode. ONE visible error per episode;
     /// re-armed when the mic is released (a new call may warn once again).
     private var didWarnStartFailure = false
+    private var recordingReadyAt: Date?
+    private var audioBuffersProcessed = 0
+    private var audioSecondsProcessed: TimeInterval = 0
+    private var lastPipelineMetricAt: Date?
+    private var maxQueueDelayMs = 0
+    private var maxPushMs = 0
 
     /// Number of consecutive mic-active polls required before starting a session.
     /// The first active poll is only the baseline observation (0 ms of confirmed
@@ -78,8 +85,9 @@ public actor SessionOrchestrator {
         config: AppConfiguration,
         detector: MicSignalSource,
         makeCapturer: @escaping @Sendable () -> AudioCapturing,
-        makeEngine: @escaping @Sendable () -> TranscriptionEngine,
+        makeEngine: @escaping @Sendable (EngineKind) -> TranscriptionEngine,
         makeWriter: @escaping @Sendable () -> TranscriptWriting,
+        engineSelection: (@Sendable () -> TranscriptionEngineOption)? = nil,
         presenter: any Presenting,
         permissions: PermissionChecking,
         now: @escaping @Sendable () -> Date = { Date() }
@@ -89,6 +97,7 @@ public actor SessionOrchestrator {
         self.makeCapturer = makeCapturer
         self.makeEngine = makeEngine
         self.makeWriter = makeWriter
+        self.engineSelection = engineSelection ?? { TranscriptionEngineOption.from(config) }
         self.presenter = presenter
         self.permissions = permissions
         self.now = now
@@ -268,13 +277,14 @@ public actor SessionOrchestrator {
         Log.orchestrator.notice("Session \(id, privacy: .public) detected; starting capture/engine.")
 
         // 1. Engine (may incur model-load cost, §8.1).
-        let engine = makeEngine()
+        let selectedEngine = engineSelection()
+        let engine = makeEngine(selectedEngine.engine)
         let engineConfig = EngineConfig(
             language: config.language,
             sampleRate: config.sampleRate,
             windowSeconds: config.transcriptionWindowSeconds,
-            model: config.whisperModel,
-            modelFolder: config.whisperModelFolder
+            model: selectedEngine.whisperModel.isEmpty ? config.whisperModel : selectedEngine.whisperModel,
+            modelFolder: selectedEngine.whisperModelFolder
         )
         do {
             try await engine.start(engineConfig)
@@ -285,6 +295,7 @@ public actor SessionOrchestrator {
         }
         self.engine = engine
         state.engineID = engine.id
+        Log.orchestrator.notice("Using transcription option \(selectedEngine.title, privacy: .public).")
 
         // 2. Audio capture (system + microphone, §7.1).
         let capturer = makeCapturer()
@@ -325,7 +336,14 @@ public actor SessionOrchestrator {
         state.currentSession = session
         // Seed at recording-ready (NOT `startedAt`): engine/model startup above
         // can take many seconds and must not eat into the inactivity budget.
-        state.lastAudioActivityAt = now()
+        let readyAt = now()
+        recordingReadyAt = readyAt
+        audioBuffersProcessed = 0
+        audioSecondsProcessed = 0
+        lastPipelineMetricAt = nil
+        maxQueueDelayMs = 0
+        maxPushMs = 0
+        state.lastAudioActivityAt = readyAt
         state.sessionStatus = .recording
         await presenter.showCaptions()
         await presenter.updateStatus(.recording, endReason: nil)
@@ -369,9 +387,11 @@ public actor SessionOrchestrator {
 
     private func handleAudio(_ buffer: AudioBuffer) async {
         guard state.sessionStatus == .recording, let engine = self.engine else { return }
+        let processingStartedAt = now()
+        let queueDelayMs = max(0, Int(processingStartedAt.timeIntervalSince(buffer.capturedAt) * 1000))
 
         if buffer.rms >= config.activityThresholdRMS {
-            state.lastAudioActivityAt = now()
+            state.lastAudioActivityAt = processingStartedAt
         } else if await finalizeIfAudioInactive(via: "audio stream") {
             // Primary silence-timeout evaluation rides the audio stream — the
             // signal actually being measured (§7.3) — so it fires within one
@@ -380,6 +400,7 @@ public actor SessionOrchestrator {
         }
 
         let segments: [Segment]
+        let pushStartedAt = now()
         do {
             segments = try await engine.push(buffer)
         } catch {
@@ -389,6 +410,12 @@ public actor SessionOrchestrator {
             await finalizeSession(reason: .error)
             return
         }
+        let pushMs = max(0, Int(now().timeIntervalSince(pushStartedAt) * 1000))
+        audioBuffersProcessed += 1
+        audioSecondsProcessed += buffer.duration
+        maxQueueDelayMs = max(maxQueueDelayMs, queueDelayMs)
+        maxPushMs = max(maxPushMs, pushMs)
+        maybeLogPipelineMetric(queueDelayMs: queueDelayMs, pushMs: pushMs, segmentCount: segments.count)
 
         for seg in segments {
             if seg.isFinal {
@@ -484,8 +511,11 @@ public actor SessionOrchestrator {
         state.sessionStatus = .saved
         await presenter.updateStatus(.saved, endReason: reason)
 
-        // Saved -> Idle (§6.2): return to observing.
+        // Saved -> Idle (§6.2): return to observing — and SHOW it. Without the
+        // .idle update the UI stays frozen on "Saved" and the user can't tell
+        // the app is still watching for the next call.
         resetToIdle()
+        await presenter.updateStatus(.idle, endReason: reason)
         Log.orchestrator.notice("Session saved → idle.")
     }
 
@@ -509,6 +539,12 @@ public actor SessionOrchestrator {
         state.sessionStatus = .idle
         state.currentSession = nil
         inactiveMicTicks = 0
+        recordingReadyAt = nil
+        audioBuffersProcessed = 0
+        audioSecondsProcessed = 0
+        lastPipelineMetricAt = nil
+        maxQueueDelayMs = 0
+        maxPushMs = 0
     }
 
     /// Common Failed -> Idle tail (§6.2, §10.2): mark the session failed,
@@ -529,6 +565,28 @@ public actor SessionOrchestrator {
             await presenter.presentError(message)
         }
         resetToIdle()
+        // Back to observing — reflect it in the UI (the failure detail stays
+        // visible in the engine-health line and the notification).
+        await presenter.updateStatus(.idle, endReason: .error)
+    }
+
+    private func maybeLogPipelineMetric(queueDelayMs: Int, pushMs: Int, segmentCount: Int) {
+        let current = now()
+        let sinceLast = lastPipelineMetricAt.map { current.timeIntervalSince($0) } ?? .infinity
+        let important = queueDelayMs >= 5_000 || pushMs >= 1_000
+        guard lastPipelineMetricAt == nil || sinceLast >= (important ? 5 : 15) else { return }
+        lastPipelineMetricAt = current
+
+        let realtimeLagMs: Int
+        if let recordingReadyAt {
+            realtimeLagMs = max(0, Int((current.timeIntervalSince(recordingReadyAt) - audioSecondsProcessed) * 1000))
+        } else {
+            realtimeLagMs = 0
+        }
+
+        Log.metrics.notice(
+            "pipeline queue_delay_ms=\(queueDelayMs, privacy: .public) push_ms=\(pushMs, privacy: .public) realtime_lag_ms=\(realtimeLagMs, privacy: .public) max_queue_delay_ms=\(self.maxQueueDelayMs, privacy: .public) max_push_ms=\(self.maxPushMs, privacy: .public) processed_audio_ms=\(Int(self.audioSecondsProcessed * 1000), privacy: .public) buffers=\(self.audioBuffersProcessed, privacy: .public) emitted_segments=\(segmentCount, privacy: .public)"
+        )
     }
 
     private func currentElapsed() -> TimeInterval {

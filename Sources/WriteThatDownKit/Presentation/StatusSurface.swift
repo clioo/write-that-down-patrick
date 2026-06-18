@@ -18,6 +18,7 @@ public final class StatusSurface: NSObject {
     public var onManualStop: (() -> Void)?
     public var onToggleCaptions: (() -> Void)?
     public var onOpenFolder: (() -> Void)?
+    public var onSelectEngineOption: ((String) -> Void)?
     public var onQuit: (() -> Void)?
 
     public init(model: StatusModel) {
@@ -44,13 +45,14 @@ public final class StatusSurface: NSObject {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 300, height: 360)
+        popover.contentSize = NSSize(width: 300, height: 390)
         popover.contentViewController = NSHostingController(
             rootView: StatusPopoverView(
                 model: model,
                 onStop: { [weak self] in self?.onManualStop?() },
                 onToggleCaptions: { [weak self] in self?.onToggleCaptions?() },
                 onOpenFolder: { [weak self] in self?.onOpenFolder?() },
+                onSelectEngineOption: { [weak self] id in self?.onSelectEngineOption?(id) },
                 onQuit: { [weak self] in self?.onQuit?() }
             )
         )

@@ -2,7 +2,6 @@ import Foundation
 import AVFoundation
 import Speech
 import CoreGraphics
-import UserNotifications
 
 /// Concrete `PermissionChecking` talking to the real OS permission systems:
 /// microphone (AVFoundation), system-audio/screen-recording (CoreGraphics TCC),
@@ -10,19 +9,28 @@ import UserNotifications
 /// engine is selected). Used to gate session starts (§10.2, §12).
 public final class SystemPermissionManager: PermissionChecking, @unchecked Sendable {
 
-    private let requiresSpeech: Bool
-    private let isBundled = Bundle.main.bundlePath.hasSuffix(".app")
+    private let requiresSpeechProvider: @Sendable () -> Bool
 
     public init(requiresSpeech: Bool) {
-        self.requiresSpeech = requiresSpeech
+        self.requiresSpeechProvider = { requiresSpeech }
+    }
+
+    public init(requiresSpeech: @escaping @Sendable () -> Bool) {
+        self.requiresSpeechProvider = requiresSpeech
     }
 
     public func currentStatus() async -> PermissionSnapshot {
+        // NOTE: deliberately does NOT query UNUserNotificationCenter. This
+        // method runs on the orchestrator's serial event loop before every
+        // session start; notificationSettings() is async-XPC and has been
+        // observed to hang, which would stall the loop forever and stop ALL
+        // further call detection. Notifications never gate `canStartSession`
+        // anyway — authorization is requested once via NotificationService.
         PermissionSnapshot(
             microphone: Self.map(AVCaptureDevice.authorizationStatus(for: .audio)),
             screenCapture: CGPreflightScreenCaptureAccess() ? .granted : .denied,
-            notifications: await notificationStatus(),
-            speech: requiresSpeech ? Self.map(SFSpeechRecognizer.authorizationStatus()) : .notRequired
+            notifications: .notRequired,
+            speech: requiresSpeechProvider() ? Self.map(SFSpeechRecognizer.authorizationStatus()) : .notRequired
         )
     }
 
@@ -38,7 +46,7 @@ public final class SystemPermissionManager: PermissionChecking, @unchecked Senda
         _ = CGRequestScreenCaptureAccess()
 
         // Speech (only when the native engine needs it).
-        if requiresSpeech, SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+        if requiresSpeechProvider(), SFSpeechRecognizer.authorizationStatus() == .notDetermined {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 SFSpeechRecognizer.requestAuthorization { _ in c.resume() }
             }
@@ -66,14 +74,4 @@ public final class SystemPermissionManager: PermissionChecking, @unchecked Senda
         }
     }
 
-    private func notificationStatus() async -> PermissionStatus {
-        guard isBundled else { return .notRequired }
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral: return .granted
-        case .denied: return .denied
-        case .notDetermined: return .notDetermined
-        @unknown default: return .denied
-        }
-    }
 }

@@ -43,6 +43,22 @@ if CommandLine.arguments.contains("--check-permissions") {
     exit(0)
 }
 
+// Print which apps are using the microphone RIGHT NOW (per-process attribution,
+// macOS 14+) split into call-triggering vs excluded, then exit. The fastest way
+// to find a bundle ID worth adding to `excludedApps`.
+if CommandLine.arguments.contains("--who-uses-mic") {
+    if #available(macOS 14.0, *) {
+        let config = AppEnvironment.loadConfiguration()
+        let excluded = Set(config.excludedBundleIDs.map { $0.lowercased() })
+        let (active, ignored) = CallDetector.capturingApps(excluding: excluded, ownPID: getpid())
+        print("would trigger a call: \(active.isEmpty ? "(none)" : active.sorted().joined(separator: ", "))")
+        print("excluded (ignored):   \(ignored.isEmpty ? "(none)" : ignored.sorted().joined(separator: ", "))")
+    } else {
+        print("per-process attribution requires macOS 14+; this system only reports device-level use: \(CallDetector.anyInputDeviceRunning())")
+    }
+    exit(0)
+}
+
 // Print the resolved configuration (defaults < config file < env vars) and exit.
 if CommandLine.arguments.contains("--print-config") {
     let c = AppEnvironment.loadConfiguration()

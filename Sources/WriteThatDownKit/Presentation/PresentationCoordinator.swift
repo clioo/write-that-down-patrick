@@ -28,6 +28,13 @@ public final class PresentationCoordinator: Presenting {
             mainWindow.onQuit = { [weak self] in self?.onQuit?() }
         }
     }
+    /// Wired to the app-layer settings persistence.
+    public var onSelectEngineOption: ((String) -> Void)? {
+        didSet {
+            statusSurface.onSelectEngineOption = onSelectEngineOption
+            mainWindow.onSelectEngineOption = { [weak self] id in self?.onSelectEngineOption?(id) }
+        }
+    }
 
     public init(outputDir: URL, notifications: NotificationService = NotificationService()) {
         self.outputDir = outputDir
@@ -77,6 +84,30 @@ public final class PresentationCoordinator: Presenting {
         statusModel.engineName = engineName
         statusModel.modelName = modelName
         statusModel.modelDetail = modelDetail
+    }
+
+    public func setEngineOptions(_ options: [TranscriptionEngineOption], selectedID: String) {
+        statusModel.engineOptions = options
+        statusModel.selectedEngineOptionID = selectedID
+        if let selected = options.first(where: { $0.id == selectedID }) {
+            updateSelectedEngineOption(selected, resetHealth: false)
+        }
+    }
+
+    public func updateSelectedEngineOption(_ option: TranscriptionEngineOption, resetHealth: Bool = true) {
+        statusModel.selectedEngineOptionID = option.id
+        switch option.engine {
+        case .native:
+            statusModel.engineName = "Apple Speech (on-device)"
+            statusModel.modelName = "macOS dictation model"
+        case .default:
+            statusModel.engineName = "WhisperKit (local)"
+            statusModel.modelName = option.whisperModel
+        }
+        statusModel.modelDetail = option.detail
+        if resetHealth {
+            statusModel.engineHealth = .untested
+        }
     }
 
     /// Shows (or brings forward) the desktop dashboard window — called on

@@ -13,10 +13,12 @@ import Foundation
 public struct AudioBuffer: Sendable, Equatable {
     public let samples: [Float]
     public let sampleRate: Double
+    public let capturedAt: Date
 
-    public init(samples: [Float], sampleRate: Double) {
+    public init(samples: [Float], sampleRate: Double, capturedAt: Date = Date()) {
         self.samples = samples
         self.sampleRate = sampleRate
+        self.capturedAt = capturedAt
     }
 
     public var frameCount: Int { samples.count }
@@ -34,5 +36,5 @@ public struct AudioBuffer: Sendable, Equatable {
         return (sum / Float(samples.count)).squareRoot()
     }
 
-    public static let silent = AudioBuffer(samples: [], sampleRate: 16_000)
+    public static let silent = AudioBuffer(samples: [], sampleRate: 16_000, capturedAt: Date(timeIntervalSince1970: 0))
 }
