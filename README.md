@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/patrick-notes-hero.png" width="100%" alt="Patrick Star enthusiastically taking notes for Write That Down">
+  <img src="docs/assets/patrick-notes-hero.png" width="100%" alt="SpongeBob urgently points while Patrick Star takes notes beside their campfire">
 </p>
 
 <h1 align="center">Write That Down</h1>
@@ -365,5 +365,6 @@ The normative behavior and test matrix live in [`SPEC.md`](./SPEC.md). Third-par
 model and runtime notices live in
 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
 
-<sub>The Patrick Star hero is unofficial fan artwork. This project is not
-affiliated with or endorsed by Nickelodeon or the character's rights holders.</sub>
+<sub>The SpongeBob and Patrick hero is unofficial fan artwork inspired by the
+“Write that down!” moment in “The Camping Episode.” This project is not
+affiliated with or endorsed by Nickelodeon or the characters' rights holders.</sub>
