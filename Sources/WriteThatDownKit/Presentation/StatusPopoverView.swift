@@ -85,6 +85,7 @@ public final class StatusModel: ObservableObject {
 /// captions toggle, and transcript actions.
 struct StatusPopoverView: View {
     @ObservedObject var model: StatusModel
+    var onOpenApp: () -> Void
     var onStop: () -> Void
     var onToggleCaptions: () -> Void
     var onOpenFolder: () -> Void
@@ -108,6 +109,17 @@ struct StatusPopoverView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            Button(action: onOpenApp) {
+                Label(
+                    statusLanguage.text("Open Write That Down", spanish: "Abrir Write That Down"),
+                    systemImage: "macwindow"
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .keyboardShortcut("o", modifiers: [.command])
 
             Divider()
 

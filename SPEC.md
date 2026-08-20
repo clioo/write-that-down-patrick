@@ -103,6 +103,8 @@ Important boundary:
 
   - Presents session status and triggers notifications.
   - Allows manual control (stop / pause).
+  - Provides an explicit action that opens the full conversation workspace in
+    every session state, including Idle.
 
 7. `Transcript Writer`
 
@@ -126,6 +128,13 @@ Important boundary:
   - Stores and retrieves the OpenCode Go API key from the macOS Keychain.
   - Never exposes the key in transcript files, application configuration,
     process arguments, or logs.
+
+11. `Conversation Library`
+
+  - Indexes finalized Markdown transcripts beneath `output_dir`.
+  - Presents the current session and stored conversations in a selectable list.
+  - Restores each selected transcript and its saved summary, when present, as
+    assistant context without requiring the user to copy a filesystem path.
 
 ### 3.2 Abstraction Levels
 
@@ -610,11 +619,14 @@ accepted from its JSON file; it belongs exclusively in the credential store.
 
 - The conversation workspace MUST allow the user to submit questions while a
   recording is active.
-- Each request MUST be grounded in the latest available final transcript text.
+- The workspace MUST allow the user to select a finalized conversation from the
+  conversation library and submit new questions about that selected transcript.
+- Each request MUST be grounded in the latest available final transcript text
+  for the selected current or stored conversation.
   It MAY additionally include the current partial hypothesis, clearly identified
   as provisional.
-- Assistant chat history MUST be scoped to the current session and bounded to
-  prevent unbounded request growth.
+- Assistant chat history MUST be scoped to the selected conversation and bounded
+  to prevent unbounded request growth.
 - Each request runs Pi in one-shot mode. The workspace MUST show request progress
   and present the complete response when that process finishes.
 - An assistant request failure MUST be shown without stopping recording,
@@ -834,9 +846,12 @@ Validation profiles:
 - Live captions (partial and final segments).
 - Live conversation workspace with transcript, OpenCode Go chat, and final
   summary.
+- Conversation library navigation for finalized transcripts, with Q&A and
+  summary generation scoped to the selected conversation.
 - English and Spanish UI selection from the primary macOS language, with an
   English fallback.
-- Menu bar status surface with manual control.
+- Menu bar status surface with manual control and an always-available action to
+  open the full application workspace.
 - Notification when a call is detected and started.
 - Markdown writing with the structure of §9.1.
 - Date-based folder structure and start-time+duration naming (§9.2, §9.3).
@@ -868,6 +883,10 @@ floating caption surface remains independently hideable.
 - It MUST NOT become a requirement for capture or persistence correctness.
 - It MUST present current-session history with follow-mode auto-scroll that can be
   paused when the user reads earlier text.
+- It MUST provide a conversation sidebar containing the current session and
+  non-empty finalized transcripts discovered below `output_dir`, newest first.
+- Selecting a stored conversation MUST update the transcript, duration, chat,
+  summary, copy, and reveal-file actions to that conversation.
 - It MUST keep transcript and assistant panes usable at the same time during an
   active conversation.
 - It MUST expose distinct Chat and Summary views and identify the selected model

@@ -16,6 +16,7 @@ public final class StatusSurface: NSObject {
 
     /// Callbacks wired by the composition root.
     public var onManualStop: (() -> Void)?
+    public var onOpenApp: (() -> Void)?
     public var onToggleCaptions: (() -> Void)?
     public var onOpenFolder: (() -> Void)?
     public var onSelectEngineOption: ((String) -> Void)?
@@ -47,10 +48,11 @@ public final class StatusSurface: NSObject {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 300, height: 390)
+        popover.contentSize = NSSize(width: 300, height: 440)
         popover.contentViewController = NSHostingController(
             rootView: StatusPopoverView(
                 model: model,
+                onOpenApp: { [weak self] in self?.onOpenApp?() },
                 onStop: { [weak self] in self?.onManualStop?() },
                 onToggleCaptions: { [weak self] in self?.onToggleCaptions?() },
                 onOpenFolder: { [weak self] in self?.onOpenFolder?() },

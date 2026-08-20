@@ -39,9 +39,10 @@ public enum PresentationPreviewMode: Sendable {
 @MainActor
 public final class PresentationCoordinator: Presenting {
 
-    private let captionModel = CaptionModel()
-    private let statusModel = StatusModel()
-    private let workspaceModel = ConversationWorkspaceModel()
+    private let captionModel: CaptionModel
+    private let statusModel: StatusModel
+    private let workspaceModel: ConversationWorkspaceModel
+    private let conversationLibrary: ConversationLibraryModel
     private let captionSurface: CaptionSurface
     private let statusSurface: StatusSurface
     private let mainWindow: MainWindowController
@@ -51,8 +52,8 @@ public final class PresentationCoordinator: Presenting {
     private let conversationAssistant: any ConversationAssistant
     private let credentialStore: OpenCodeGoCredentialStore
     private var assistantAPIKey: String?
-    private var answerTask: Task<Void, Never>?
-    private var summaryTask: Task<Void, Never>?
+    private var answerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var summaryTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var conversationGeneration = UUID()
 
     private static let selectedAssistantModelKey = "openCodeGoAssistantModel"
@@ -119,19 +120,36 @@ public final class PresentationCoordinator: Presenting {
         self.notifications = notifications
         self.conversationAssistant = conversationAssistant
         self.credentialStore = credentialStore
+        let captionModel = CaptionModel()
+        let statusModel = StatusModel()
+        let workspaceModel = ConversationWorkspaceModel()
+        let conversationLibrary = ConversationLibraryModel(
+            outputDir: outputDir,
+            currentWorkspace: workspaceModel,
+            selectMostRecent: PresentationPreviewMode.current() == nil
+        )
+        self.captionModel = captionModel
+        self.statusModel = statusModel
+        self.workspaceModel = workspaceModel
+        self.conversationLibrary = conversationLibrary
         self.captionSurface = CaptionSurface(model: captionModel)
         self.statusSurface = StatusSurface(model: statusModel)
         self.mainWindow = MainWindowController(
             statusModel: statusModel,
             captionModel: captionModel,
-            workspaceModel: workspaceModel
+            workspaceModel: workspaceModel,
+            conversationLibrary: conversationLibrary
         )
 
         let openFolder: () -> Void = { [outputDir] in
             NSWorkspace.shared.open(outputDir)
         }
         self.statusSurface.onOpenFolder = openFolder
+        self.statusSurface.onOpenApp = { [weak self] in self?.mainWindow.show() }
         self.mainWindow.onOpenFolder = openFolder
+        self.mainWindow.onRevealConversation = { path in
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        }
         self.mainWindow.onAsk = { [weak self] question in
             self?.askConversation(question)
         }
@@ -140,6 +158,15 @@ public final class PresentationCoordinator: Presenting {
         }
         self.mainWindow.onSaveAssistantAPIKey = { [weak self] key in
             self?.saveAssistantAPIKey(key)
+        }
+        self.mainWindow.onSelectConversation = { [weak self] id in
+            self?.selectConversation(id: id)
+        }
+        self.mainWindow.onRefreshConversations = { [weak self] in
+            self?.refreshConversations()
+        }
+        self.mainWindow.onGenerateSelectedSummary = { [weak self] in
+            self?.generateSelectedSummary()
         }
 
         // Toggle the caption panel mid-meeting without touching the session.
@@ -223,7 +250,22 @@ public final class PresentationCoordinator: Presenting {
     /// Shows (or brings forward) the desktop dashboard window — called on
     /// launch and whenever the user re-opens the app from Spotlight/Finder.
     public func showMainWindow() {
+        refreshConversations()
         mainWindow.show()
+    }
+
+    private func selectConversation(id: String?) {
+        conversationLibrary.selectConversation(id: id)
+        if PresentationPreviewMode.current() == nil {
+            synchronizeAssistantConfiguration()
+        }
+    }
+
+    private func refreshConversations() {
+        conversationLibrary.refresh()
+        if PresentationPreviewMode.current() == nil {
+            synchronizeAssistantConfiguration()
+        }
     }
 
     /// Deterministic, network-free fixture used to compare the native window
@@ -326,6 +368,29 @@ public final class PresentationCoordinator: Presenting {
         mainWindow.onOpenFolder = {}
 
         let startedAt = Self.previewStartedAt
+        conversationLibrary.installPreviewConversations([
+            StoredConversation(
+                fileURL: URL(fileURLWithPath: "/tmp/wtd-preview/2026-05-19/15-30_32min.md"),
+                title: presentationLanguage.text("Product review", spanish: "Revisión de producto"),
+                startedAt: startedAt.addingTimeInterval(-18 * 60 * 60),
+                duration: 32 * 60,
+                segments: [Segment(index: 0, timestamp: 0, text: presentationLanguage.text("We approved the onboarding update.", spanish: "Aprobamos la actualización de onboarding."), isFinal: true)]
+            ),
+            StoredConversation(
+                fileURL: URL(fileURLWithPath: "/tmp/wtd-preview/2026-05-18/11-00_45min.md"),
+                title: presentationLanguage.text("Weekly planning", spanish: "Planeación semanal"),
+                startedAt: startedAt.addingTimeInterval(-47 * 60 * 60),
+                duration: 45 * 60,
+                segments: [Segment(index: 0, timestamp: 0, text: presentationLanguage.text("The team reviewed next week's priorities.", spanish: "El equipo revisó las prioridades de la próxima semana."), isFinal: true)]
+            ),
+            StoredConversation(
+                fileURL: URL(fileURLWithPath: "/tmp/wtd-preview/2026-05-16/09-15_18min.md"),
+                title: presentationLanguage.text("Design sync", spanish: "Sincronización de diseño"),
+                startedAt: startedAt.addingTimeInterval(-94 * 60 * 60),
+                duration: 18 * 60,
+                segments: [Segment(index: 0, timestamp: 0, text: presentationLanguage.text("The navigation direction was confirmed.", spanish: "Se confirmó la dirección de navegación."), isFinal: true)]
+            ),
+        ])
         captionModel.reset()
         captionModel.sessionStartedAt = startedAt
         [
@@ -334,14 +399,16 @@ public final class PresentationCoordinator: Presenting {
             Segment(index: 2, timestamp: 120, text: presentationLanguage.text("Marcos: I'll prepare the dashboard.", spanish: "Marcos: Yo preparo el dashboard."), isFinal: true),
         ].forEach(captionModel.appendFinal)
         statusModel.hasSessionContent = true
-        workspaceModel.isConfigured = true
-        workspaceModel.setAssistantModels(
-            [
-                .init(id: "gpt-5.6-luna", title: "GPT-5.6 Luna", detail: "OpenCode Go"),
-                .init(id: "glm-5.2", title: "GLM-5.2", detail: "OpenCode Go"),
-            ],
-            selectedID: "gpt-5.6-luna"
-        )
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.isConfigured = true
+            workspace.setAssistantModels(
+                [
+                    .init(id: "gpt-5.6-luna", title: "GPT-5.6 Luna", detail: "OpenCode Go"),
+                    .init(id: "glm-5.2", title: "GLM-5.2", detail: "OpenCode Go"),
+                ],
+                selectedID: "gpt-5.6-luna"
+            )
+        }
         return startedAt
     }
 
@@ -365,8 +432,11 @@ public final class PresentationCoordinator: Presenting {
 
     public func sessionWillStart(session: RecordingSession) {
         conversationGeneration = UUID()
-        answerTask?.cancel()
-        summaryTask?.cancel()
+        answerTasks.values.forEach { $0.cancel() }
+        summaryTasks.values.forEach { $0.cancel() }
+        answerTasks.removeAll()
+        summaryTasks.removeAll()
+        conversationLibrary.selectConversation(id: nil)
         captionSurface.reset()
         statusModel.hasSessionContent = false
         sessionAttempted = true
@@ -456,6 +526,8 @@ public final class PresentationCoordinator: Presenting {
 
     public func updateTranscriptPath(_ path: String?) {
         statusModel.lastTranscriptPath = path
+        conversationLibrary.refresh()
+        synchronizeAssistantConfiguration()
     }
 
     public func presentError(_ message: String) {
@@ -487,19 +559,19 @@ public final class PresentationCoordinator: Presenting {
         }
         let preferred = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey)
             ?? PiOpenCodeGoAssistant.defaultModelID
-        workspaceModel.setAssistantModels(fallback, selectedID: preferred)
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.setAssistantModels(fallback, selectedID: preferred)
+        }
 
         do {
             assistantAPIKey = try credentialStore.loadAPIKey()
-            workspaceModel.isConfigured = assistantAPIKey?.isEmpty == false
-            workspaceModel.configurationError = nil
+            synchronizeAssistantConfiguration(error: nil)
         } catch {
             assistantAPIKey = nil
-            workspaceModel.isConfigured = false
-            workspaceModel.configurationError = error.localizedDescription
+            synchronizeAssistantConfiguration(error: error.localizedDescription)
         }
 
-        if workspaceModel.isConfigured {
+        if assistantAPIKey?.isEmpty == false {
             refreshAssistantModels()
         }
     }
@@ -508,12 +580,11 @@ public final class PresentationCoordinator: Presenting {
         do {
             try credentialStore.saveAPIKey(rawKey)
             assistantAPIKey = try credentialStore.loadAPIKey()
-            workspaceModel.isConfigured = assistantAPIKey?.isEmpty == false
-            workspaceModel.configurationError = nil
+            synchronizeAssistantConfiguration(error: nil)
             refreshAssistantModels()
         } catch {
-            workspaceModel.isConfigured = false
-            workspaceModel.configurationError = error.localizedDescription
+            assistantAPIKey = nil
+            synchronizeAssistantConfiguration(error: error.localizedDescription)
         }
     }
 
@@ -533,55 +604,79 @@ public final class PresentationCoordinator: Presenting {
                 }
                 let preferred = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey)
                     ?? PiOpenCodeGoAssistant.defaultModelID
-                self.workspaceModel.setAssistantModels(options, selectedID: preferred)
-                self.workspaceModel.configurationError = nil
+                for workspace in self.conversationLibrary.allWorkspaces {
+                    workspace.setAssistantModels(options, selectedID: preferred)
+                    workspace.configurationError = nil
+                }
             } catch {
-                self?.workspaceModel.configurationError = error.localizedDescription
+                self?.synchronizeAssistantConfiguration(error: error.localizedDescription)
             }
         }
     }
 
     private func selectAssistantModel(_ id: String) {
-        guard workspaceModel.assistantModels.contains(where: { $0.id == id }) else { return }
-        workspaceModel.selectedAssistantModelID = id
+        guard conversationLibrary.selectedWorkspace.assistantModels.contains(where: { $0.id == id }) else { return }
+        for workspace in conversationLibrary.allWorkspaces
+        where workspace.assistantModels.contains(where: { $0.id == id }) {
+            workspace.selectedAssistantModelID = id
+        }
         UserDefaults.standard.set(id, forKey: Self.selectedAssistantModelKey)
     }
 
+    private func synchronizeAssistantConfiguration(error: String? = nil) {
+        let configured = assistantAPIKey?.isEmpty == false
+        let sourceModels = workspaceModel.assistantModels.isEmpty
+            ? PiOpenCodeGoAssistant.fallbackModels.map {
+                ConversationWorkspaceModel.AssistantModel(id: $0.id, title: $0.title, detail: "OpenCode Go")
+            }
+            : workspaceModel.assistantModels
+        let preferred = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey)
+            ?? workspaceModel.selectedAssistantModelID
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.isConfigured = configured
+            workspace.configurationError = error
+            workspace.setAssistantModels(sourceModels, selectedID: preferred)
+        }
+    }
+
     private func askConversation(_ rawQuestion: String) {
+        let workspace = conversationLibrary.selectedWorkspace
+        let transcript = conversationLibrary.selectedConversation?.transcriptText
+            ?? captionModel.fullTranscriptText
         let question = rawQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
         guard let apiKey = assistantAPIKey, !apiKey.isEmpty else {
-            workspaceModel.configurationError = ConversationAssistantError.missingAPIKey.localizedDescription
-            workspaceModel.isConfigured = false
+            workspace.configurationError = ConversationAssistantError.missingAPIKey.localizedDescription
+            workspace.isConfigured = false
             return
         }
-        guard !captionModel.fullTranscriptText.isEmpty else {
-            workspaceModel.failAssistantResponse(presentationLanguage.text(
+        guard !transcript.isEmpty else {
+            workspace.failAssistantResponse(presentationLanguage.text(
                 "There is not enough transcript content to answer yet.",
                 spanish: "Aún no hay suficiente transcripción para responder."
             ))
             return
         }
-        guard !workspaceModel.isAnswering else { return }
+        guard !workspace.isAnswering else { return }
 
-        let modelID = workspaceModel.selectedAssistantModelID.isEmpty
+        let modelID = workspace.selectedAssistantModelID.isEmpty
             ? PiOpenCodeGoAssistant.defaultModelID
-            : workspaceModel.selectedAssistantModelID
-        let transcript = captionModel.fullTranscriptText
-        let priorConversation = workspaceModel.messages.compactMap { message -> ConversationAssistantTurn? in
+            : workspace.selectedAssistantModelID
+        let priorConversation = workspace.messages.compactMap { message -> ConversationAssistantTurn? in
             guard message.errorMessage == nil, !message.content.isEmpty else { return nil }
             return ConversationAssistantTurn(
                 role: message.role == .user ? .user : .assistant,
                 text: message.content
             )
         }
-        workspaceModel.appendUserMessage(question)
-        let responseID = workspaceModel.beginAssistantResponse()
+        workspace.appendUserMessage(question)
+        let responseID = workspace.beginAssistantResponse()
         let generation = conversationGeneration
         let assistant = conversationAssistant
+        let workspaceID = ObjectIdentifier(workspace)
 
-        answerTask?.cancel()
-        answerTask = Task { [weak self] in
+        answerTasks[workspaceID]?.cancel()
+        answerTasks[workspaceID] = Task { [weak self, workspace] in
             do {
                 let answer = try await assistant.answer(
                     transcript: transcript,
@@ -591,34 +686,62 @@ public final class PresentationCoordinator: Presenting {
                     apiKey: apiKey
                 )
                 guard let self, self.conversationGeneration == generation else { return }
-                self.workspaceModel.appendAssistantDelta(answer, to: responseID)
-                self.workspaceModel.finishAssistantResponse(responseID)
+                workspace.appendAssistantDelta(answer, to: responseID)
+                workspace.finishAssistantResponse(responseID)
+                self.answerTasks[workspaceID] = nil
             } catch is CancellationError {
+                workspace.finishAssistantResponse(responseID)
+                self?.answerTasks[workspaceID] = nil
                 return
             } catch {
                 guard let self, self.conversationGeneration == generation else { return }
-                self.workspaceModel.failAssistantResponse(error.localizedDescription, responseID: responseID)
+                workspace.failAssistantResponse(error.localizedDescription, responseID: responseID)
+                self.answerTasks[workspaceID] = nil
             }
         }
     }
 
     private func generateFinalSummaryIfConfigured() {
-        guard let apiKey = assistantAPIKey, !apiKey.isEmpty else { return }
-        let transcript = captionModel.fullTranscriptText
-        guard !transcript.isEmpty else {
-            workspaceModel.completeSummary("")
+        generateSummary(
+            transcript: captionModel.fullTranscriptText,
+            transcriptPath: statusModel.lastTranscriptPath,
+            workspace: workspaceModel
+        )
+    }
+
+    private func generateSelectedSummary() {
+        guard let conversation = conversationLibrary.selectedConversation else { return }
+        generateSummary(
+            transcript: conversation.transcriptText,
+            transcriptPath: conversation.fileURL.path,
+            workspace: conversationLibrary.selectedWorkspace
+        )
+    }
+
+    private func generateSummary(
+        transcript: String,
+        transcriptPath: String?,
+        workspace: ConversationWorkspaceModel
+    ) {
+        guard let apiKey = assistantAPIKey, !apiKey.isEmpty else {
+            workspace.configurationError = ConversationAssistantError.missingAPIKey.localizedDescription
+            workspace.isConfigured = false
             return
         }
-        let modelID = workspaceModel.selectedAssistantModelID.isEmpty
+        guard !transcript.isEmpty else {
+            workspace.completeSummary("")
+            return
+        }
+        let modelID = workspace.selectedAssistantModelID.isEmpty
             ? PiOpenCodeGoAssistant.defaultModelID
-            : workspaceModel.selectedAssistantModelID
+            : workspace.selectedAssistantModelID
         let generation = conversationGeneration
-        let transcriptPath = statusModel.lastTranscriptPath
         let assistant = conversationAssistant
-        workspaceModel.beginSummary()
+        let workspaceID = ObjectIdentifier(workspace)
+        workspace.beginSummary()
 
-        summaryTask?.cancel()
-        summaryTask = Task { [weak self] in
+        summaryTasks[workspaceID]?.cancel()
+        summaryTasks[workspaceID] = Task { [weak self, workspace] in
             do {
                 let summary = try await assistant.summarize(
                     transcript: transcript,
@@ -626,13 +749,20 @@ public final class PresentationCoordinator: Presenting {
                     apiKey: apiKey
                 )
                 guard let self, self.conversationGeneration == generation else { return }
-                self.workspaceModel.completeSummary(summary)
+                workspace.completeSummary(summary)
                 Self.persistSummary(summary, nextTo: transcriptPath)
+                if let transcriptPath {
+                    self.conversationLibrary.updatePersistedSummary(summary, transcriptPath: transcriptPath)
+                    self.synchronizeAssistantConfiguration()
+                }
+                self.summaryTasks[workspaceID] = nil
             } catch is CancellationError {
+                self?.summaryTasks[workspaceID] = nil
                 return
             } catch {
                 guard let self, self.conversationGeneration == generation else { return }
-                self.workspaceModel.failSummary(error.localizedDescription)
+                workspace.failSummary(error.localizedDescription)
+                self.summaryTasks[workspaceID] = nil
             }
         }
     }
