@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/patrick-notes-hero.png" width="100%" alt="SpongeBob urgently points while Patrick Star takes notes beside their campfire">
+  <img src="docs/assets/patrick-notes-hero.png" width="100%" alt="Black-and-white SpongeBob urgently points while Patrick Star takes notes beside their campfire">
 </p>
 
 <h1 align="center">Write That Down</h1>
