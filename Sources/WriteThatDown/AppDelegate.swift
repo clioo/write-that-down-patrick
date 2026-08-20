@@ -44,9 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // operation starts (§11).
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "Write That Down — configuration error"
+            alert.messageText = AppLanguage.current.text(
+                "Write That Down — configuration error",
+                spanish: "Write That Down — error de configuración"
+            )
             alert.informativeText = error.localizedDescription
-            alert.addButton(withTitle: "Quit")
+            alert.addButton(withTitle: AppLanguage.current.text("Quit", spanish: "Salir"))
             alert.runModal()
             NSApp.terminate(nil)
         }

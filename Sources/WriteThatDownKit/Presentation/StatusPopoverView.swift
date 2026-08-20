@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
 
+private let statusLanguage = AppLanguage.current
+
 /// Pipeline health shown in the popover, derived from session outcomes.
 public enum EngineHealth: Equatable, Sendable {
     /// No session has run yet this launch.
@@ -19,7 +21,7 @@ public enum EngineHealth: Equatable, Sendable {
 public final class StatusModel: ObservableObject {
     @Published public var status: SessionStatus = .idle
     @Published public var endReason: EndReason?
-    @Published public var detail: String = "Waiting for a call…"
+    @Published public var detail: String = statusLanguage.text("Waiting for a call…", spanish: "Esperando una llamada…")
     /// Absolute path of the current/last transcript file (provisional while
     /// recording, final after save). Kept after the session so the user can
     /// reveal/copy it post-call.
@@ -69,12 +71,12 @@ public final class StatusModel: ObservableObject {
 
     public var headline: String {
         switch status {
-        case .idle: return "Idle"
-        case .detected: return "Call detected…"
-        case .recording: return "Recording"
-        case .finalizing: return "Saving…"
-        case .saved: return "Saved"
-        case .failed: return "Failed"
+        case .idle: return statusLanguage.text("Idle", spanish: "En espera")
+        case .detected: return statusLanguage.text("Call detected…", spanish: "Llamada detectada…")
+        case .recording: return statusLanguage.text("Recording", spanish: "Grabando")
+        case .finalizing: return statusLanguage.text("Saving…", spanish: "Guardando…")
+        case .saved: return statusLanguage.text("Saved", spanish: "Guardado")
+        case .failed: return statusLanguage.text("Failed", spanish: "Falló")
         }
     }
 }
@@ -114,14 +116,16 @@ struct StatusPopoverView: View {
             Divider()
 
             Button(action: onStop) {
-                Label("Stop Recording", systemImage: "stop.circle")
+                Label(statusLanguage.text("Stop Recording", spanish: "Detener grabación"), systemImage: "stop.circle")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(!model.canStop)
             .keyboardShortcut(".", modifiers: [.command])
 
             Button(action: onToggleCaptions) {
-                Label(model.captionsVisible ? "Hide Captions" : "Show Captions",
+                Label(model.captionsVisible
+                      ? statusLanguage.text("Hide Captions", spanish: "Ocultar subtítulos")
+                      : statusLanguage.text("Show Captions", spanish: "Mostrar subtítulos"),
                       systemImage: model.captionsVisible ? "captions.bubble.fill" : "captions.bubble")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -139,13 +143,13 @@ struct StatusPopoverView: View {
                     onOpenFolder()
                 }
             } label: {
-                Label("Reveal Latest Transcript", systemImage: "doc.text.magnifyingglass")
+                Label(statusLanguage.text("Reveal Latest Transcript", spanish: "Mostrar la última transcripción"), systemImage: "doc.text.magnifyingglass")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .disabled(model.lastTranscriptPath == nil)
 
             Button(action: onOpenFolder) {
-                Label("Open Transcripts Folder", systemImage: "folder")
+                Label(statusLanguage.text("Open Transcripts Folder", spanish: "Abrir carpeta de transcripciones"), systemImage: "folder")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -161,7 +165,9 @@ struct StatusPopoverView: View {
                     if !Task.isCancelled { pathCopied = false }
                 }
             } label: {
-                Label(pathCopied ? "Copied!" : "Copy Transcript Path",
+                Label(pathCopied
+                      ? statusLanguage.text("Copied!", spanish: "¡Copiado!")
+                      : statusLanguage.text("Copy Transcript Path", spanish: "Copiar ruta de la transcripción"),
                       systemImage: pathCopied ? "checkmark" : "doc.on.clipboard")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -169,7 +175,7 @@ struct StatusPopoverView: View {
             Divider()
 
             Button(action: onQuit) {
-                Label("Quit Write That Down", systemImage: "power")
+                Label(statusLanguage.text("Quit Write That Down", spanish: "Salir de Write That Down"), systemImage: "power")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .keyboardShortcut("q", modifiers: [.command])
@@ -187,7 +193,7 @@ struct StatusPopoverView: View {
                     modelPickerShown.toggle()
                 } label: {
                     HStack(spacing: 6) {
-                        Text(model.selectedEngineOption?.title ?? "Select model")
+                        Text(model.selectedEngineOption?.title ?? statusLanguage.text("Select model", spanish: "Seleccionar modelo"))
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         Image(systemName: "chevron.down")
@@ -236,15 +242,24 @@ struct StatusPopoverView: View {
     private var healthText: String {
         switch model.engineHealth {
         case .untested:
-            return "Not tested yet — starts with your first call"
+            return statusLanguage.text(
+                "Not tested yet — starts with your first call",
+                spanish: "Aún no probado — se inicia con tu primera llamada"
+            )
         case let .healthy(date):
             let f = DateFormatter()
             f.dateFormat = "HH:mm"
-            return "Working — verified \(f.string(from: date))"
+            return statusLanguage.text(
+                "Working — verified \(f.string(from: date))",
+                spanish: "Funcionando — verificado \(f.string(from: date))"
+            )
         case let .failed(message):
-            return "Failed: \(message)"
+            return statusLanguage.text("Failed: \(message)", spanish: "Falló: \(message)")
         case let .blocked(message):
-            return "Blocked (engine untested): \(message)"
+            return statusLanguage.text(
+                "Blocked (engine untested): \(message)",
+                spanish: "Bloqueado (motor no probado): \(message)"
+            )
         }
     }
 
@@ -281,9 +296,12 @@ private struct SpeechModelPickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Speech Model")
+                Text(statusLanguage.text("Speech Model", spanish: "Modelo de voz"))
                     .font(.headline)
-                Text("Downloaded models run entirely on this Mac.")
+                Text(statusLanguage.text(
+                    "Downloaded models run entirely on this Mac.",
+                    spanish: "Los modelos descargados se ejecutan completamente en esta Mac."
+                ))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -339,9 +357,11 @@ private struct SpeechModelPickerView: View {
                         HStack(spacing: 6) {
                             Text(option.title)
                                 .font(.system(size: 13, weight: .semibold))
-                            badge(option.isStreaming ? "streaming" : "offline", color: .secondary)
+                            badge(option.isStreaming
+                                  ? statusLanguage.text("streaming", spanish: "en vivo")
+                                  : statusLanguage.text("offline", spanish: "sin conexión"), color: .secondary)
                             if option.isRecommended {
-                                badge("recommended", color: .green)
+                                badge(statusLanguage.text("recommended", spanish: "recomendado"), color: .green)
                             }
                             if let bytes = option.sizeBytes {
                                 Text(Self.formattedSize(bytes))
@@ -394,7 +414,7 @@ private struct SpeechModelPickerView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Delete \(option.title)")
+            .help(statusLanguage.text("Delete \(option.title)", spanish: "Eliminar \(option.title)"))
             .disabled(!model.canChangeEngine)
         } else if option.isDownloadable {
             switch state {
@@ -406,7 +426,7 @@ private struct SpeechModelPickerView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Download \(option.title)")
+                .help(statusLanguage.text("Download \(option.title)", spanish: "Descargar \(option.title)"))
                 .disabled(!model.canChangeEngine)
             case .downloading:
                 EmptyView()

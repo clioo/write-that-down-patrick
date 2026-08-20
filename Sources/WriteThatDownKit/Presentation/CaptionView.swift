@@ -1,12 +1,14 @@
 import SwiftUI
 import AppKit
 
+private let captionLanguage = AppLanguage.current
+
 /// Observable model backing the live caption surface.
 @MainActor
 public final class CaptionModel: ObservableObject {
     @Published public var finals: [Segment] = []
     @Published public var partial: String = ""
-    @Published public var statusText: String = "Listening…"
+    @Published public var statusText: String = captionLanguage.text("Listening…", spanish: "Escuchando…")
     @Published public var sessionStartedAt: Date?
     // NOTE: follow-mode ("pinned to live edge") is deliberately NOT here. It is
     // per-viewport UI state (@State in CaptionView): the floating panel and the
@@ -102,14 +104,14 @@ struct CaptionView: View {
                 Image(systemName: "textformat.size.smaller")
             }
             .buttonStyle(.borderless)
-            .help("Smaller text")
+            .help(captionLanguage.text("Smaller text", spanish: "Texto más pequeño"))
             .disabled(model.fontSize <= CaptionModel.minFontSize)
 
             Button { model.adjustFontSize(by: 1) } label: {
                 Image(systemName: "textformat.size.larger")
             }
             .buttonStyle(.borderless)
-            .help("Larger text")
+            .help(captionLanguage.text("Larger text", spanish: "Texto más grande"))
             .disabled(model.fontSize >= CaptionModel.maxFontSize)
 
             Button {
@@ -127,7 +129,7 @@ struct CaptionView: View {
                 Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
             }
             .buttonStyle(.borderless)
-            .help("Copy transcript so far")
+            .help(captionLanguage.text("Copy transcript so far", spanish: "Copiar la transcripción hasta ahora"))
             .disabled(model.finals.isEmpty)
         }
     }
@@ -215,7 +217,7 @@ struct CaptionView: View {
                             // isFollowingLive flips true via the PreferenceKey
                             // once the scroll settles and the sentinel is in view.
                         } label: {
-                            Label("Jump to live", systemImage: "arrow.down.to.line")
+                            Label(captionLanguage.text("Jump to live", spanish: "Ir al directo"), systemImage: "arrow.down.to.line")
                                 .font(.system(size: 11, weight: .semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 5)
@@ -223,7 +225,10 @@ struct CaptionView: View {
                         }
                         .buttonStyle(.plain)
                         .padding(8)
-                        .help("Resume auto-scrolling with the conversation")
+                        .help(captionLanguage.text(
+                            "Resume auto-scrolling with the conversation",
+                            spanish: "Reanudar el desplazamiento automático con la conversación"
+                        ))
                     }
                 }
             }
