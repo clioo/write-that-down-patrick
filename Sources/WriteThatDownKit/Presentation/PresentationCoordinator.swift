@@ -661,6 +661,8 @@ public final class PresentationCoordinator: Presenting {
             workspace.isConnectingProvider = false
             workspace.pendingAuthPrompt = nil
             workspace.authStatusMessage = nil
+            workspace.authDeviceCode = nil
+            workspace.authVerificationURL = nil
             workspace.configurationError = nil
             workspace.setAssistantProviders(
                 providers,
@@ -714,6 +716,8 @@ public final class PresentationCoordinator: Presenting {
                 "Starting sign-in…",
                 spanish: "Iniciando sesión…"
             )
+            workspace.authDeviceCode = nil
+            workspace.authVerificationURL = nil
         }
         let assistant = conversationAssistant
         authTask = Task { [weak self] in
@@ -734,12 +738,19 @@ public final class PresentationCoordinator: Presenting {
                 )
                 self.refreshAssistantProviders()
                 self.authTask = nil
+            } catch is CancellationError {
+                self.dismissAuthPrompt()
+                self.authTask = nil
+            } catch ConversationAssistantError.cancelled {
+                self.dismissAuthPrompt()
+                self.authTask = nil
             } catch {
-                self.authPromptContinuation?.resume(throwing: ConversationAssistantError.cancelled)
-                self.authPromptContinuation = nil
+                self.dismissAuthPrompt()
                 for workspace in self.conversationLibrary.allWorkspaces {
                     workspace.isConnectingProvider = false
                     workspace.pendingAuthPrompt = nil
+                    workspace.authDeviceCode = nil
+                    workspace.authVerificationURL = nil
                     workspace.configurationError = error.localizedDescription
                 }
                 self.authTask = nil
@@ -765,8 +776,17 @@ public final class PresentationCoordinator: Presenting {
             workspace.pendingAuthPrompt = prompt
             workspace.authStatusMessage = prompt.message
         }
-        return try await withCheckedThrowingContinuation { continuation in
-            authPromptContinuation = continuation
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    authPromptContinuation = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.dismissAuthPrompt() }
         }
     }
 
@@ -780,13 +800,23 @@ public final class PresentationCoordinator: Presenting {
     private func cancelAuth() {
         authTask?.cancel()
         authTask = nil
-        authPromptContinuation?.resume(throwing: ConversationAssistantError.cancelled)
-        authPromptContinuation = nil
+        dismissAuthPrompt()
         for workspace in conversationLibrary.allWorkspaces {
             workspace.pendingAuthPrompt = nil
             workspace.isConnectingProvider = false
             workspace.authStatusMessage = nil
+            workspace.authDeviceCode = nil
+            workspace.authVerificationURL = nil
         }
+    }
+
+    private func dismissAuthPrompt() {
+        let continuation = authPromptContinuation
+        authPromptContinuation = nil
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.pendingAuthPrompt = nil
+        }
+        continuation?.resume(throwing: CancellationError())
     }
 
     private func handleAuthEvent(_ event: PiAuthEvent) {
@@ -806,6 +836,8 @@ public final class PresentationCoordinator: Presenting {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(code, forType: .string)
             for workspace in conversationLibrary.allWorkspaces {
+                workspace.authDeviceCode = code
+                workspace.authVerificationURL = verificationURL
                 workspace.authStatusMessage = presentationLanguage.text(
                     "Code \(code) copied. Finish signing in in your browser.",
                     spanish: "Código \(code) copiado. Termina de iniciar sesión en tu navegador."
@@ -889,12 +921,15 @@ public final class PresentationCoordinator: Presenting {
     }
 
     private func generateSelectedSummary() {
-        guard let conversation = conversationLibrary.selectedConversation else { return }
-        generateSummary(
-            transcript: conversation.transcriptText,
-            transcriptPath: conversation.fileURL.path,
-            workspace: conversationLibrary.selectedWorkspace
-        )
+        if let conversation = conversationLibrary.selectedConversation {
+            generateSummary(
+                transcript: conversation.transcriptText,
+                transcriptPath: conversation.fileURL.path,
+                workspace: conversationLibrary.selectedWorkspace
+            )
+        } else if workspaceModel.phase == .finished {
+            generateFinalSummaryIfConfigured()
+        }
     }
 
     private func generateSummary(
@@ -919,6 +954,7 @@ public final class PresentationCoordinator: Presenting {
         let assistant = conversationAssistant
         let workspaceID = ObjectIdentifier(workspace)
         workspace.beginSummary()
+        Log.presentation.notice("Generating summary with provider=\(provider.id, privacy: .public), model=\(modelID, privacy: .public).")
 
         summaryTasks[workspaceID]?.cancel()
         summaryTasks[workspaceID] = Task { [weak self, workspace] in
@@ -941,6 +977,7 @@ public final class PresentationCoordinator: Presenting {
                 return
             } catch {
                 guard let self, self.conversationGeneration == generation else { return }
+                Log.presentation.error("Summary failed with provider=\(provider.id, privacy: .public), model=\(modelID, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 workspace.failSummary(error.localizedDescription)
                 self.summaryTasks[workspaceID] = nil
             }

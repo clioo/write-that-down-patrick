@@ -226,6 +226,8 @@ provider. The app shows exactly the connection methods Pi exposes. For example,
 OpenAI Codex offers browser-based ChatGPT subscription sign-in, while OpenCode Go
 offers an API-key form. OpenAI documents both ChatGPT and API-key authentication
 for its local Codex clients in its [authentication guide](https://developers.openai.com/codex/auth).
+Device codes are displayed as selectable text with a dedicated copy button, and
+successful browser callbacks return to the connected state automatically.
 Credentials are stored in the login Keychain rather than `config.json` or the
 transcript directory.
 

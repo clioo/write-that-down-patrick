@@ -44,6 +44,42 @@ final class PiProviderBridgeTests: XCTestCase {
         let refreshed = try await bridge.catalog()
         XCTAssertTrue(try XCTUnwrap(refreshed.first { $0.id == "example" }).isConfigured)
     }
+
+    func testOAuthCallbackCompletesWhileManualFallbackPromptIsPending() async throws {
+        let fixture = try ProviderBridgeFixture()
+        defer { fixture.remove() }
+        let store = PiProviderCredentialStore(serviceName: "com.writethatdown.bridge-tests.\(UUID().uuidString)")
+        defer { try? store.deleteCredential(for: "oauth-example") }
+        let bridge = PiProviderBridge(
+            piExecutable: fixture.piExecutable,
+            nodeExecutable: fixture.nodeExecutable,
+            credentialStore: store,
+            timeout: 10
+        )
+
+        try await bridge.connect(
+            providerID: "oauth-example",
+            authType: .oauth,
+            interaction: PiProviderAuthInteraction(
+                prompt: { prompt in
+                    XCTAssertEqual(prompt.kind, .manualCode)
+                    try await Task.sleep(nanoseconds: 30_000_000_000)
+                    return "unused-manual-code"
+                },
+                notify: { event in
+                    guard case .authURL = event else {
+                        XCTFail("Expected an OAuth URL event")
+                        return
+                    }
+                }
+            )
+        )
+
+        let saved = try XCTUnwrap(store.credentialData(for: "oauth-example"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        XCTAssertEqual(object["type"] as? String, "oauth")
+        XCTAssertEqual(object["access"] as? String, "fixture-access")
+    }
 }
 
 private final class ProviderBridgeFixture {
@@ -107,6 +143,24 @@ private final class ProviderBridgeFixture {
         return Object.entries(data).map(([providerId, value]) => ({ providerId, type: value.type }));
       }
       async login(providerID, type, interaction) {
+        if (providerID === "oauth-example") {
+          interaction.notify({ type: "auth_url", url: "https://example.test/oauth" });
+          void interaction.prompt({
+            type: "manual_code",
+            message: "Paste redirect URL",
+            placeholder: "http://localhost/callback",
+          }).catch(() => {});
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          const data = JSON.parse(readFileSync(this.authPath, "utf8"));
+          data[providerID] = {
+            type: "oauth",
+            access: "fixture-access",
+            refresh: "fixture-refresh",
+            expires: Date.now() + 3600000,
+          };
+          writeFileSync(this.authPath, JSON.stringify(data), { mode: 0o600 });
+          return;
+        }
         interaction.notify({ type: "progress", message: "Checking key" });
         const key = await interaction.prompt({ type: "secret", message: "Example API key", placeholder: "secret" });
         const data = JSON.parse(readFileSync(this.authPath, "utf8"));

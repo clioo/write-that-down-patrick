@@ -88,6 +88,8 @@ public final class ConversationWorkspaceModel: ObservableObject {
     @Published public var isConnectingProvider = false
     @Published public var authStatusMessage: String?
     @Published public var pendingAuthPrompt: PiAuthPrompt?
+    @Published public var authDeviceCode: String?
+    @Published public var authVerificationURL: URL?
 
     public init() {}
 
@@ -214,7 +216,9 @@ public final class ConversationWorkspaceModel: ObservableObject {
         if let selectedID, models.contains(where: { $0.id == selectedID }) {
             selectedAssistantModelID = selectedID
         } else if !models.contains(where: { $0.id == selectedAssistantModelID }) {
-            selectedAssistantModelID = models.first?.id ?? ""
+            selectedAssistantModelID = models.first(where: {
+                $0.id == PiConversationAssistant.defaultModelID
+            })?.id ?? models.first?.id ?? ""
         }
     }
 

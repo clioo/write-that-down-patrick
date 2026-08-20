@@ -137,6 +137,8 @@ public actor PiProviderBridge {
         defer { timeoutTask.cancel() }
 
         var finalResult: BridgeResult?
+        var promptTasks: [Task<Void, Never>] = []
+        defer { promptTasks.forEach { $0.cancel() } }
         do {
             for try await line in output.fileHandleForReading.bytes.lines {
                 guard let data = line.data(using: .utf8),
@@ -149,18 +151,32 @@ public actor PiProviderBridge {
                 case "prompt":
                     guard let interaction else { throw ConversationAssistantError.invalidResponse }
                     let prompt = try Self.decodePrompt(object)
-                    let response = try await interaction.prompt(prompt)
-                    let payload = try JSONSerialization.data(
-                        withJSONObject: ["id": prompt.id, "value": response]
-                    )
-                    try input.fileHandleForWriting.write(contentsOf: payload)
-                    try input.fileHandleForWriting.write(contentsOf: Data([0x0A]))
+                    // Pi's browser OAuth can finish through its localhost
+                    // callback while the manual-code fallback prompt is still
+                    // visible. Keep draining stdout so the later `complete`
+                    // message is not blocked behind that optional prompt.
+                    promptTasks.append(Task {
+                        do {
+                            let response = try await interaction.prompt(prompt)
+                            try Task.checkCancellation()
+                            let payload = try JSONSerialization.data(
+                                withJSONObject: ["id": prompt.id, "value": response]
+                            )
+                            try input.fileHandleForWriting.write(contentsOf: payload)
+                            try input.fileHandleForWriting.write(contentsOf: Data([0x0A]))
+                        } catch is CancellationError {
+                            // Expected when an OAuth callback completes first.
+                        } catch {
+                            if process.isRunning { process.terminate() }
+                        }
+                    })
                 case "event":
                     if let event = Self.decodeEvent(object), let interaction {
                         await interaction.notify(event)
                     }
                 case "complete":
                     finalResult = .connected
+                    promptTasks.forEach { $0.cancel() }
                 case "error":
                     throw ConversationAssistantError.requestFailed(
                         String((object["message"] as? String ?? "Pi authentication failed.").prefix(800))
