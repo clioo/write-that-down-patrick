@@ -14,5 +14,6 @@ public enum Log {
     public static let persistence = Logger(subsystem: subsystem, category: "persistence")
     public static let presentation = Logger(subsystem: subsystem, category: "presentation")
     public static let permissions = Logger(subsystem: subsystem, category: "permissions")
+    public static let dictation = Logger(subsystem: subsystem, category: "dictation")
     public static let app = Logger(subsystem: subsystem, category: "app")
 }

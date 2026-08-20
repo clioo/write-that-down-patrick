@@ -62,11 +62,12 @@ the choice of local engine and downloaded model for the next conversation.
 
 ### 4. Dictate into any app with the same local model
 
-Enable **⌘E Dictation** in Settings, select a text field in any app, and press
-`⌘E` to listen. Press it again to transcribe and insert the result at the cursor.
-It follows the engine selected in the Transcription tab, captures microphone
-audio only, keeps that audio in memory, and never creates a meeting or contacts
-an AI provider.
+Enable **Local Dictation** in Settings, select a text field in any app, and hold
+the global shortcut while you speak. Release it to transcribe and insert the
+result at the cursor. The shortcut is configurable (and defaults to `⌘E`). It
+follows the engine selected in the Transcription tab, captures microphone audio
+immediately—even while a cold model is loading—keeps that audio in memory, and
+never creates a meeting or contacts an AI provider.
 
 ![The optional global dictation shortcut using the selected local transcription model](docs/screenshots/dictation-settings.jpg)
 
@@ -90,8 +91,9 @@ the underlying transcript from being saved.
 
 - **Local live transcription.** Microphone and system audio are mixed and
   transcribed on the Mac with a local speech engine.
-- **Local dictation anywhere.** An optional global `⌘E` shortcut writes speech
-  into the selected text field with the same local transcription model.
+- **Local dictation anywhere.** Hold a configurable global shortcut to record;
+  release it to write speech into the selected text field with the same local
+  transcription model.
 - **A conversation-aware workspace.** Follow the transcript and ask grounded
   questions without switching apps, then revisit saved conversations from the
   built-in history.
@@ -243,7 +245,7 @@ macOS may request:
   though Write That Down captures audio rather than screen video.
 - **Notifications** — optional; used for recording and error alerts.
 - **Speech Recognition** — requested only when Apple's native engine is selected.
-- **Accessibility** — requested only when global `⌘E` dictation is enabled; it
+- **Accessibility** — requested only when global dictation is enabled; it
   lets Write That Down insert the local transcript into the selected field.
 
 If a required permission is missing, recording remains blocked and the app shows
@@ -271,10 +273,10 @@ and begin a new episode after granting access.
 
 For local dictation outside meetings:
 
-1. Open **Settings → Dictation** and enable **⌘E dictation**.
+1. Open **Settings → Dictation**, choose a shortcut, and enable local dictation.
 2. Grant Accessibility access when macOS asks.
-3. Select a writable text field in any app and press `⌘E`.
-4. Speak, then press `⌘E` again to transcribe and insert at the cursor.
+3. Select a writable text field in any app and hold the shortcut while speaking.
+4. Release the shortcut to transcribe and insert at the cursor.
 
 Dictation is intentionally unavailable during an active meeting recording.
 

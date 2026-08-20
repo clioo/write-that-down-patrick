@@ -86,7 +86,8 @@ final class AppEnvironment {
                     phase: snapshot.phase,
                     targetApplicationName: snapshot.targetApplicationName,
                     engineName: snapshot.engineName,
-                    errorMessage: snapshot.errorMessage
+                    errorMessage: snapshot.errorMessage,
+                    shortcut: snapshot.shortcut
                 )
             }
         )
@@ -121,6 +122,12 @@ final class AppEnvironment {
         }
         presenter.onSetDictationEnabled = { enabled in
             dictationController.setEnabled(enabled)
+        }
+        presenter.onSetDictationShortcut = { shortcut in
+            dictationController.setShortcut(shortcut)
+        }
+        presenter.onSetDictationShortcutRecording = { recording in
+            dictationController.setShortcutRecording(recording)
         }
         presenter.onRequestDictationAccessibility = {
             dictationController.requestAccessibilityPermission()
