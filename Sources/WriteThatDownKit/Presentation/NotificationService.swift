@@ -33,8 +33,12 @@ public final class NotificationService {
     }
 
     public func notifyCallStarted(session: RecordingSession) {
-        post(title: "Recording started",
-             body: "Write That Down is transcribing this call locally.",
+        let language = AppLanguage.current
+        post(title: language.text("Recording started", spanish: "Grabación iniciada"),
+             body: language.text(
+                "Write That Down is transcribing this call locally.",
+                spanish: "Write That Down está transcribiendo esta llamada localmente."
+             ),
              id: "call-started-\(session.id)")
     }
 

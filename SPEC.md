@@ -47,6 +47,8 @@ Important boundary:
 - Simultaneously capture system audio and microphone audio.
 - Transcribe captured audio in real time using a swappable transcription engine.
 - Display a live transcript and conversation workspace during the call.
+- Present the interface in English or Spanish according to the primary macOS
+  language, with English as the fallback for unsupported languages.
 - Support in-session Q&A and generate a summary after finalization using
   OpenCode Go models.
 - Expose operational status to the user (menu bar and notifications).
@@ -786,6 +788,8 @@ Validation profiles:
   creating a transcript.
 - The main workspace presents live transcript and chat concurrently, then exposes
   the generated summary.
+- English and Spanish primary-language identifiers select their corresponding UI;
+  an unsupported or missing primary language selects English.
 
 ### 15.6 Failures
 
@@ -830,6 +834,8 @@ Validation profiles:
 - Live captions (partial and final segments).
 - Live conversation workspace with transcript, OpenCode Go chat, and final
   summary.
+- English and Spanish UI selection from the primary macOS language, with an
+  English fallback.
 - Menu bar status surface with manual control.
 - Notification when a call is detected and started.
 - Markdown writing with the structure of §9.1.

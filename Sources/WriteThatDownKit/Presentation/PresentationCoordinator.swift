@@ -1,5 +1,7 @@
 import AppKit
 
+private let presentationLanguage = AppLanguage.current
+
 /// Explicit screenshot fixtures. Detection is intentionally limited to the
 /// documented flags and dedicated preview bundle names so a normal
 /// `Write That Down.app` launch can never enter fixture mode accidentally.
@@ -164,7 +166,11 @@ public final class PresentationCoordinator: Presenting {
     /// Installs the menu-bar item and requests notification authorization.
     public func install() async {
         statusSurface.install()
-        statusSurface.update(status: .idle, endReason: nil, detail: "Waiting for a call…")
+        statusSurface.update(
+            status: .idle,
+            endReason: nil,
+            detail: presentationLanguage.text("Waiting for a call…", spanish: "Esperando una llamada…")
+        )
         statusModel.outputDirPath = outputDir.path
         installAssistantConfiguration()
         await notifications.requestAuthorization()
@@ -199,13 +205,13 @@ public final class PresentationCoordinator: Presenting {
         statusModel.selectedEngineOptionID = option.id
         switch option.engine {
         case .native:
-            statusModel.engineName = "Apple Speech (on-device)"
-            statusModel.modelName = "macOS dictation model"
+            statusModel.engineName = presentationLanguage.text("Apple Speech (on-device)", spanish: "Apple Speech (en el dispositivo)")
+            statusModel.modelName = presentationLanguage.text("macOS dictation model", spanish: "modelo de dictado de macOS")
         case .sherpa:
-            statusModel.engineName = "sherpa-onnx (local)"
+            statusModel.engineName = presentationLanguage.text("sherpa-onnx (local)", spanish: "sherpa-onnx (local)")
             statusModel.modelName = option.title
         case .default:
-            statusModel.engineName = "WhisperKit (local)"
+            statusModel.engineName = presentationLanguage.text("WhisperKit (local)", spanish: "WhisperKit (local)")
             statusModel.modelName = option.whisperModel
         }
         statusModel.modelDetail = option.detail
@@ -227,16 +233,22 @@ public final class PresentationCoordinator: Presenting {
         statusSurface.update(
             status: .recording,
             endReason: nil,
-            detail: "Transcribing this call locally.",
+            detail: presentationLanguage.text("Transcribing this call locally.", spanish: "Transcribiendo esta llamada localmente."),
             recordingSince: startedAt
         )
 
         workspaceModel.beginConversation(startedAt: startedAt)
         workspaceModel.updateSessionStatus(.recording, startedAt: startedAt)
-        workspaceModel.appendUserMessage("¿Qué acordamos sobre el piloto?")
+        workspaceModel.appendUserMessage(presentationLanguage.text(
+            "What did we agree about the pilot?",
+            spanish: "¿Qué acordamos sobre el piloto?"
+        ))
         let responseID = workspaceModel.beginAssistantResponse()
         workspaceModel.appendAssistantDelta(
-            "Hasta ahora acordaron lanzar el piloto el lunes. Marcos preparará el dashboard y tú revisarás las métricas.",
+            presentationLanguage.text(
+                "So far, you agreed to launch the pilot on Monday. Marcos will prepare the dashboard, and you will review the metrics.",
+                spanish: "Hasta ahora acordaron lanzar el piloto el lunes. Marcos preparará el dashboard y tú revisarás las métricas."
+            ),
             to: responseID
         )
         workspaceModel.finishAssistantResponse(responseID)
@@ -250,25 +262,39 @@ public final class PresentationCoordinator: Presenting {
         statusSurface.update(
             status: .saved,
             endReason: .manual,
-            detail: "Transcript saved."
+            detail: presentationLanguage.text("Transcript saved.", spanish: "Transcripción guardada.")
         )
 
         workspaceModel.beginConversation(startedAt: startedAt)
         workspaceModel.updateSessionStatus(.recording, startedAt: startedAt)
         workspaceModel.finishConversation(endedAt: startedAt.addingTimeInterval(24 * 60 + 18))
         workspaceModel.completeSummary(
-            """
-            Resumen
-            El equipo acordó lanzar el piloto el lunes después de revisar las métricas principales.
+            presentationLanguage.text(
+                """
+                Summary
+                The team agreed to launch the pilot on Monday after reviewing the key metrics.
 
-            Decisiones
-            • El piloto comienza el lunes.
-            • El dashboard será la referencia para evaluar los resultados.
+                Decisions
+                • The pilot starts on Monday.
+                • The dashboard will be the reference for evaluating results.
 
-            Próximos pasos
-            • Marcos preparará el dashboard.
-            • Tú revisarás las métricas antes del lanzamiento.
-            """
+                Next steps
+                • Marcos will prepare the dashboard.
+                • You will review the metrics before launch.
+                """,
+                spanish: """
+                Resumen
+                El equipo acordó lanzar el piloto el lunes después de revisar las métricas principales.
+
+                Decisiones
+                • El piloto comienza el lunes.
+                • El dashboard será la referencia para evaluar los resultados.
+
+                Próximos pasos
+                • Marcos preparará el dashboard.
+                • Tú revisarás las métricas antes del lanzamiento.
+                """
+            )
         )
         mainWindow.show()
     }
@@ -303,9 +329,9 @@ public final class PresentationCoordinator: Presenting {
         captionModel.reset()
         captionModel.sessionStartedAt = startedAt
         [
-            Segment(index: 0, timestamp: 0, text: "Ana: Entonces lanzamos el piloto el lunes.", isFinal: true),
-            Segment(index: 1, timestamp: 60, text: "Tú: Sí, pero primero necesitamos revisar las métricas.", isFinal: true),
-            Segment(index: 2, timestamp: 120, text: "Marcos: Yo preparo el dashboard.", isFinal: true),
+            Segment(index: 0, timestamp: 0, text: presentationLanguage.text("Ana: Then we launch the pilot on Monday.", spanish: "Ana: Entonces lanzamos el piloto el lunes."), isFinal: true),
+            Segment(index: 1, timestamp: 60, text: presentationLanguage.text("You: Yes, but first we need to review the metrics.", spanish: "Tú: Sí, pero primero necesitamos revisar las métricas."), isFinal: true),
+            Segment(index: 2, timestamp: 120, text: presentationLanguage.text("Marcos: I'll prepare the dashboard.", spanish: "Marcos: Yo preparo el dashboard."), isFinal: true),
         ].forEach(captionModel.appendFinal)
         statusModel.hasSessionContent = true
         workspaceModel.isConfigured = true
@@ -344,7 +370,7 @@ public final class PresentationCoordinator: Presenting {
         captionSurface.reset()
         statusModel.hasSessionContent = false
         sessionAttempted = true
-        captionModel.statusText = "Starting…"
+        captionModel.statusText = presentationLanguage.text("Starting…", spanish: "Iniciando…")
         captionModel.sessionStartedAt = session.startedAt
         workspaceModel.beginConversation(startedAt: session.startedAt)
         mainWindow.showForConversation()
@@ -400,7 +426,10 @@ public final class PresentationCoordinator: Presenting {
             // Recording also proves the model is on disk now; freshen a stale
             // "not downloaded yet" hint from launch time.
             if statusModel.modelDetail.hasPrefix("Not downloaded") {
-                statusModel.modelDetail = "Downloaded · loads offline"
+                statusModel.modelDetail = presentationLanguage.text(
+                    "Downloaded · loads offline",
+                    spanish: "Descargado · se carga sin conexión"
+                )
             }
         }
         if status == .idle {
@@ -440,7 +469,10 @@ public final class PresentationCoordinator: Presenting {
         // the meeting app at exactly the wrong moment (spec §10.2 only requires
         // the error be visible, not blocking).
         statusSurface.update(status: .failed, endReason: .error, detail: message)
-        notifications.notify(title: "Write That Down — Error", body: message)
+        notifications.notify(
+            title: presentationLanguage.text("Write That Down — Error", spanish: "Write That Down — Error"),
+            body: message
+        )
     }
 
     // MARK: OpenCode Go meeting assistant
@@ -524,7 +556,10 @@ public final class PresentationCoordinator: Presenting {
             return
         }
         guard !captionModel.fullTranscriptText.isEmpty else {
-            workspaceModel.failAssistantResponse("Aún no hay suficiente transcripción para responder.")
+            workspaceModel.failAssistantResponse(presentationLanguage.text(
+                "There is not enough transcript content to answer yet.",
+                spanish: "Aún no hay suficiente transcripción para responder."
+            ))
             return
         }
         guard !workspaceModel.isAnswering else { return }
@@ -619,13 +654,23 @@ public final class PresentationCoordinator: Presenting {
     private static func detail(for status: SessionStatus, reason: EndReason?) -> String {
         switch status {
         case .idle:
-            if let reason { return "Last session ended (\(reason.rawValue)). Waiting for a call…" }
-            return "Waiting for a call…"
-        case .detected: return "Call detected — starting capture…"
-        case .recording: return "Transcribing this call locally."
-        case .finalizing: return "Saving transcript…"
-        case .saved: return "Transcript saved."
-        case .failed: return "Session failed. Click for details."
+            if let reason {
+                return presentationLanguage.text(
+                    "Last session ended (\(reason.rawValue)). Waiting for a call…",
+                    spanish: "La última sesión terminó (\(reason.rawValue)). Esperando una llamada…"
+                )
+            }
+            return presentationLanguage.text("Waiting for a call…", spanish: "Esperando una llamada…")
+        case .detected:
+            return presentationLanguage.text("Call detected — starting capture…", spanish: "Llamada detectada — iniciando captura…")
+        case .recording:
+            return presentationLanguage.text("Transcribing this call locally.", spanish: "Transcribiendo esta llamada localmente.")
+        case .finalizing:
+            return presentationLanguage.text("Saving transcript…", spanish: "Guardando transcripción…")
+        case .saved:
+            return presentationLanguage.text("Transcript saved.", spanish: "Transcripción guardada.")
+        case .failed:
+            return presentationLanguage.text("Session failed. Click for details.", spanish: "La sesión falló. Haz clic para ver los detalles.")
         }
     }
 }

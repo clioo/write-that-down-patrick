@@ -64,6 +64,8 @@ the underlying transcript from being saved.
   questions without switching apps.
 - **A useful finish.** The completed transcript is saved first; an OpenCode Go
   summary is generated afterward when the assistant is configured.
+- **English or Spanish UI.** Write That Down follows the primary macOS language
+  when it is English or Spanish and falls back to English for every other language.
 - **Files that remain yours.** Final transcript segments are written
   incrementally to timestamped Markdown under `~/Transcripts` by default.
 - **Captions built for reading.** Scroll back without being yanked to the bottom,

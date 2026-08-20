@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+private let recordingPromptLanguage = AppLanguage.current
+
 /// Small Granola-style confirmation surface for ambiguous microphone use.
 /// It intentionally does not activate the app or steal focus from the app in
 /// which the user is speaking.
@@ -103,9 +105,12 @@ private struct RecordingPromptView: View {
             .frame(width: 46, height: 46)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("¿Estás en una conversación?")
+                Text(recordingPromptLanguage.text("Are you in a conversation?", spanish: "¿Estás en una conversación?"))
                     .font(.system(size: 15, weight: .semibold))
-                Text("\(sourceName) está usando el micrófono. ¿Quieres transcribirla?")
+                Text(recordingPromptLanguage.text(
+                    "\(sourceName) is using the microphone. Do you want to transcribe it?",
+                    spanish: "\(sourceName) está usando el micrófono. ¿Quieres transcribirla?"
+                ))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -113,11 +118,11 @@ private struct RecordingPromptView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(spacing: 7) {
-                Button("Grabar", action: onAccept)
+                Button(recordingPromptLanguage.text("Record", spanish: "Grabar"), action: onAccept)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .keyboardShortcut(.defaultAction)
-                Button("Ahora no", action: onDecline)
+                Button(recordingPromptLanguage.text("Not now", spanish: "Ahora no"), action: onDecline)
                     .buttonStyle(.plain)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -134,6 +139,9 @@ private struct RecordingPromptView: View {
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Recording confirmation for \(sourceName)")
+        .accessibilityLabel(recordingPromptLanguage.text(
+            "Recording confirmation for \(sourceName)",
+            spanish: "Confirmación de grabación para \(sourceName)"
+        ))
     }
 }

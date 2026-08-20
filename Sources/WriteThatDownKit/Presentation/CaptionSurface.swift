@@ -30,7 +30,7 @@ public final class CaptionSurface {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Captions"
+        panel.title = AppLanguage.current.text("Captions", spanish: "Subtítulos")
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+private let conversationLanguage = AppLanguage.current
+
 /// The primary conversation window. Closing it leaves capture running and the
 /// menu-bar surface available.
 @MainActor
@@ -169,17 +171,22 @@ private struct MainWindowView: View {
             Spacer(minLength: 24)
 
             Button(action: copyTranscript) {
-                Label(transcriptCopied ? "Copiado" : "Copiar", systemImage: transcriptCopied ? "checkmark" : "doc.on.doc")
+                Label(
+                    transcriptCopied
+                        ? conversationLanguage.text("Copied", spanish: "Copiado")
+                        : conversationLanguage.text("Copy", spanish: "Copiar"),
+                    systemImage: transcriptCopied ? "checkmark" : "doc.on.doc"
+                )
                     .frame(minWidth: 82)
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
             .disabled(captionModel.finals.isEmpty)
-            .accessibilityLabel("Copiar transcripción")
+            .accessibilityLabel(conversationLanguage.text("Copy transcript", spanish: "Copiar transcripción"))
 
             if statusModel.canStop {
                 Button(action: onStop) {
-                    Label("Terminar", systemImage: "stop.fill")
+                    Label(conversationLanguage.text("End", spanish: "Terminar"), systemImage: "stop.fill")
                         .frame(minWidth: 94)
                 }
                 .buttonStyle(.borderedProminent)
@@ -188,7 +195,7 @@ private struct MainWindowView: View {
                 .keyboardShortcut(".", modifiers: [.command])
             } else if workspaceModel.phase == .finished {
                 Button(action: onOpenFolder) {
-                    Label("Ver archivo", systemImage: "doc.text")
+                    Label(conversationLanguage.text("View file", spanish: "Ver archivo"), systemImage: "doc.text")
                         .frame(minWidth: 94)
                 }
                 .buttonStyle(.bordered)
@@ -202,12 +209,12 @@ private struct MainWindowView: View {
 
     private var title: String {
         switch workspaceModel.phase {
-        case .idle: return "Listo para una conversación"
-        case .starting: return "Preparando la conversación"
-        case .live: return "Conversación en curso"
-        case .finalizing: return "Terminando la conversación"
-        case .finished: return "Conversación terminada"
-        case .failed: return "La conversación terminó con un error"
+        case .idle: return conversationLanguage.text("Ready for a conversation", spanish: "Listo para una conversación")
+        case .starting: return conversationLanguage.text("Preparing the conversation", spanish: "Preparando la conversación")
+        case .live: return conversationLanguage.text("Conversation in progress", spanish: "Conversación en curso")
+        case .finalizing: return conversationLanguage.text("Finishing the conversation", spanish: "Terminando la conversación")
+        case .finished: return conversationLanguage.text("Conversation finished", spanish: "Conversación terminada")
+        case .failed: return conversationLanguage.text("The conversation ended with an error", spanish: "La conversación terminó con un error")
         }
     }
 
@@ -224,12 +231,12 @@ private struct MainWindowView: View {
 
     private var statusPresentation: (text: String, symbol: String, color: Color) {
         switch workspaceModel.phase {
-        case .idle: return ("Esperando", "waveform", .secondary)
-        case .starting: return ("Iniciando", "waveform", .orange)
-        case .live: return ("Transcribiendo", "waveform", .green)
-        case .finalizing: return ("Guardando", "square.and.arrow.down", .orange)
-        case .finished: return ("Guardada", "checkmark.circle.fill", .green)
-        case .failed: return ("Error", "exclamationmark.triangle.fill", .red)
+        case .idle: return (conversationLanguage.text("Waiting", spanish: "Esperando"), "waveform", .secondary)
+        case .starting: return (conversationLanguage.text("Starting", spanish: "Iniciando"), "waveform", .orange)
+        case .live: return (conversationLanguage.text("Transcribing", spanish: "Transcribiendo"), "waveform", .green)
+        case .finalizing: return (conversationLanguage.text("Saving", spanish: "Guardando"), "square.and.arrow.down", .orange)
+        case .finished: return (conversationLanguage.text("Saved", spanish: "Guardada"), "checkmark.circle.fill", .green)
+        case .failed: return (conversationLanguage.text("Error", spanish: "Error"), "exclamationmark.triangle.fill", .red)
         }
     }
 
@@ -262,11 +269,11 @@ private struct MainWindowView: View {
         HStack(spacing: 8) {
             Image(systemName: "lock.fill")
                 .foregroundStyle(.secondary)
-            Text("El audio y el archivo permanecen en tu Mac")
+            Text(conversationLanguage.text("Audio and files stay on your Mac", spanish: "El audio y el archivo permanecen en tu Mac"))
                 .foregroundStyle(.secondary)
             Text("·")
                 .foregroundStyle(.tertiary)
-            Text("El contexto de IA se envía a OpenCode Go")
+            Text(conversationLanguage.text("AI context is sent to OpenCode Go", spanish: "El contexto de IA se envía a OpenCode Go"))
                 .foregroundStyle(.secondary)
         }
         .font(.system(size: 12))
@@ -306,7 +313,7 @@ private struct ConversationTranscriptPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Transcripción en vivo")
+            Text(conversationLanguage.text("Live transcript", spanish: "Transcripción en vivo"))
                 .font(.system(size: 18, weight: .bold))
                 .padding(.horizontal, 32)
                 .padding(.top, 28)
@@ -318,10 +325,13 @@ private struct ConversationTranscriptPane: View {
                     Image(systemName: "waveform")
                         .font(.system(size: 30))
                         .foregroundStyle(.tertiary)
-                    Text("La transcripción aparecerá aquí")
+                    Text(conversationLanguage.text("The transcript will appear here", spanish: "La transcripción aparecerá aquí"))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    Text("Write That Down comenzará a mostrar texto cuando detecte la conversación.")
+                    Text(conversationLanguage.text(
+                        "Write That Down will start showing text when it detects the conversation.",
+                        spanish: "Write That Down comenzará a mostrar texto cuando detecte la conversación."
+                    ))
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
@@ -418,7 +428,7 @@ private struct ConversationAssistantPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 8) {
-                Text("Pregúntale a la conversación")
+                Text(conversationLanguage.text("Ask the conversation", spanish: "Pregúntale a la conversación"))
                     .font(.system(size: 17, weight: .bold))
                     .lineLimit(1)
                     .allowsTightening(true)
@@ -434,9 +444,9 @@ private struct ConversationAssistantPane: View {
             HStack(spacing: 24) {
                 tabButton(.chat, title: "Chat")
                 HStack(spacing: 7) {
-                    tabButton(.summary, title: "Resumen")
+                    tabButton(.summary, title: conversationLanguage.text("Summary", spanish: "Resumen"))
                     if model.phase == .live || model.phase == .starting || model.phase == .finalizing {
-                        Text("al terminar")
+                        Text(conversationLanguage.text("when finished", spanish: "al terminar"))
                             .font(.system(size: 10))
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 7)
@@ -466,7 +476,7 @@ private struct ConversationAssistantPane: View {
             HStack(spacing: 4) {
                 Menu {
                     if model.assistantModels.isEmpty {
-                        Text("No hay modelos disponibles")
+                        Text(conversationLanguage.text("No models available", spanish: "No hay modelos disponibles"))
                     } else {
                         ForEach(model.assistantModels) { option in
                             Button {
@@ -500,7 +510,7 @@ private struct ConversationAssistantPane: View {
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
-                .help("Configurar OpenCode Go")
+                .help(conversationLanguage.text("Configure OpenCode Go", spanish: "Configurar OpenCode Go"))
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
@@ -509,7 +519,7 @@ private struct ConversationAssistantPane: View {
             .overlay { Capsule().stroke(Color.secondary.opacity(0.18)) }
         } else {
             Button(action: onConfigure) {
-                Label("Conectar OpenCode Go", systemImage: "sparkles")
+                Label(conversationLanguage.text("Connect OpenCode Go", spanish: "Conectar OpenCode Go"), systemImage: "sparkles")
                     .lineLimit(1)
             }
             .buttonStyle(.bordered)
@@ -556,8 +566,11 @@ private struct ConversationChatView: View {
         VStack(spacing: 0) {
             if !model.isConfigured {
                 AssistantConfigurationEmptyState(
-                    title: "Conecta OpenCode Go para chatear",
-                    detail: "Tus preguntas usan únicamente el proveedor y modelo que elijas en OpenCode Go.",
+                    title: conversationLanguage.text("Connect OpenCode Go to chat", spanish: "Conecta OpenCode Go para chatear"),
+                    detail: conversationLanguage.text(
+                        "Your questions use only the provider and model you select in OpenCode Go.",
+                        spanish: "Tus preguntas usan únicamente el proveedor y modelo que elijas en OpenCode Go."
+                    ),
                     action: onConfigure
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -567,9 +580,12 @@ private struct ConversationChatView: View {
                     Image(systemName: "sparkles")
                         .font(.system(size: 26))
                         .foregroundStyle(ConversationPalette.accent)
-                    Text("Pregunta sobre esta conversación")
+                    Text(conversationLanguage.text("Ask about this conversation", spanish: "Pregunta sobre esta conversación"))
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Puedes preguntar por decisiones, pendientes o cualquier detalle de la transcripción.")
+                    Text(conversationLanguage.text(
+                        "Ask about decisions, action items, or any detail in the transcript.",
+                        spanish: "Puedes preguntar por decisiones, pendientes o cualquier detalle de la transcripción."
+                    ))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -609,7 +625,11 @@ private struct ConversationChatView: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Pregunta sobre esta conversación…", text: $draft, axis: .vertical)
+            TextField(
+                conversationLanguage.text("Ask about this conversation…", spanish: "Pregunta sobre esta conversación…"),
+                text: $draft,
+                axis: .vertical
+            )
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .focused($composerFocused)
@@ -626,7 +646,7 @@ private struct ConversationChatView: View {
             .buttonStyle(.plain)
             .disabled(!canSubmit)
             .opacity(canSubmit ? 1 : 0.45)
-            .accessibilityLabel("Enviar pregunta")
+            .accessibilityLabel(conversationLanguage.text("Send question", spanish: "Enviar pregunta"))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -713,8 +733,8 @@ private struct ConversationSummaryView: View {
         Group {
             if !model.isConfigured {
                 AssistantConfigurationEmptyState(
-                    title: "Conecta OpenCode Go para generar el resumen",
-                    detail: "El resumen se creará al terminar la conversación.",
+                    title: conversationLanguage.text("Connect OpenCode Go to generate a summary", spanish: "Conecta OpenCode Go para generar el resumen"),
+                    detail: conversationLanguage.text("The summary will be created when the conversation ends.", spanish: "El resumen se creará al terminar la conversación."),
                     action: onConfigure
                 )
             } else {
@@ -732,9 +752,14 @@ private struct ConversationSummaryView: View {
                 Image(systemName: "lock")
                     .font(.system(size: 24))
                     .foregroundStyle(.tertiary)
-                Text(model.phase == .finished ? "Resumen pendiente" : "Disponible al terminar")
+                Text(model.phase == .finished
+                    ? conversationLanguage.text("Summary pending", spanish: "Resumen pendiente")
+                    : conversationLanguage.text("Available when finished", spanish: "Disponible al terminar"))
                     .font(.system(size: 15, weight: .semibold))
-                Text("OpenCode Go resumirá los puntos importantes, decisiones y próximos pasos.")
+                Text(conversationLanguage.text(
+                    "OpenCode Go will summarize key points, decisions, and next steps.",
+                    spanish: "OpenCode Go resumirá los puntos importantes, decisiones y próximos pasos."
+                ))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -744,9 +769,9 @@ private struct ConversationSummaryView: View {
         case .generating:
             VStack(spacing: 12) {
                 ProgressView()
-                Text("Preparando el resumen…")
+                Text(conversationLanguage.text("Preparing the summary…", spanish: "Preparando el resumen…"))
                     .font(.system(size: 14, weight: .medium))
-                Text("La transcripción ya está guardada en tu Mac.")
+                Text(conversationLanguage.text("The transcript is already saved on your Mac.", spanish: "La transcripción ya está guardada en tu Mac."))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -766,7 +791,7 @@ private struct ConversationSummaryView: View {
                 Image(systemName: "doc.text")
                     .font(.system(size: 25))
                     .foregroundStyle(.tertiary)
-                Text("No hubo suficiente contenido para resumir")
+                Text(conversationLanguage.text("There was not enough content to summarize", spanish: "No hubo suficiente contenido para resumir"))
                     .font(.system(size: 14, weight: .semibold))
             }
 
@@ -775,7 +800,7 @@ private struct ConversationSummaryView: View {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 25))
                     .foregroundStyle(.red)
-                Text("No se pudo generar el resumen")
+                Text(conversationLanguage.text("The summary could not be generated", spanish: "No se pudo generar el resumen"))
                     .font(.system(size: 14, weight: .semibold))
                 Text(message)
                     .font(.system(size: 12))
@@ -805,7 +830,7 @@ private struct AssistantConfigurationEmptyState: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 340)
-            Button("Configurar OpenCode Go", action: action)
+            Button(conversationLanguage.text("Configure OpenCode Go", spanish: "Configurar OpenCode Go"), action: action)
                 .buttonStyle(.borderedProminent)
                 .tint(ConversationPalette.accent)
         }
@@ -829,11 +854,14 @@ private struct AssistantAPIKeySheet: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 20))
                     .foregroundStyle(ConversationPalette.accent)
-                Text("Conectar OpenCode Go")
+                Text(conversationLanguage.text("Connect OpenCode Go", spanish: "Conectar OpenCode Go"))
                     .font(.title2.weight(.semibold))
             }
 
-            Text("Añade tu API key para hacer preguntas y generar resúmenes. Write That Down la guarda en el Keychain de este Mac y sólo la entrega al proceso aislado de Pi.")
+            Text(conversationLanguage.text(
+                "Add your API key to ask questions and generate summaries. Write That Down stores it in this Mac's Keychain and passes it only to the isolated Pi process.",
+                spanish: "Añade tu API key para hacer preguntas y generar resúmenes. Write That Down la guarda en el Keychain de este Mac y sólo la entrega al proceso aislado de Pi."
+            ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -851,13 +879,13 @@ private struct AssistantAPIKeySheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancelar") {
+                Button(conversationLanguage.text("Cancel", spanish: "Cancelar")) {
                     apiKey = ""
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button("Guardar") { save() }
+                Button(conversationLanguage.text("Save", spanish: "Guardar")) { save() }
                     .buttonStyle(.borderedProminent)
                     .tint(ConversationPalette.accent)
                     .keyboardShortcut(.defaultAction)
