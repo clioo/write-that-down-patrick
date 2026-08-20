@@ -38,6 +38,8 @@ public final class MainWindowController {
     var onCancelAuth: () -> Void = {}
     var onRefreshAssistantProviders: () -> Void = {}
     var onSetDictationEnabled: (Bool) -> Void = { _ in }
+    var onSetDictationShortcut: (DictationShortcut) -> Void = { _ in }
+    var onSetDictationShortcutRecording: (Bool) -> Void = { _ in }
     var onRequestDictationAccessibility: () -> Void = {}
     var onOpenAccessibilitySettings: () -> Void = {}
     var onSelectConversation: (String?) -> Void = { _ in }
@@ -94,6 +96,8 @@ public final class MainWindowController {
                 onCancelAuth: { [weak self] in self?.onCancelAuth() },
                 onRefreshAssistantProviders: { [weak self] in self?.onRefreshAssistantProviders() },
                 onSetDictationEnabled: { [weak self] enabled in self?.onSetDictationEnabled(enabled) },
+                onSetDictationShortcut: { [weak self] shortcut in self?.onSetDictationShortcut(shortcut) },
+                onSetDictationShortcutRecording: { [weak self] recording in self?.onSetDictationShortcutRecording(recording) },
                 onRequestDictationAccessibility: { [weak self] in self?.onRequestDictationAccessibility() },
                 onOpenAccessibilitySettings: { [weak self] in self?.onOpenAccessibilitySettings() },
                 onSelectConversation: { [weak self] id in self?.onSelectConversation(id) },
@@ -152,6 +156,8 @@ private struct MainWindowView: View {
     var onCancelAuth: () -> Void
     var onRefreshAssistantProviders: () -> Void
     var onSetDictationEnabled: (Bool) -> Void
+    var onSetDictationShortcut: (DictationShortcut) -> Void
+    var onSetDictationShortcutRecording: (Bool) -> Void
     var onRequestDictationAccessibility: () -> Void
     var onOpenAccessibilitySettings: () -> Void
     var onSelectConversation: (String?) -> Void
@@ -217,6 +223,8 @@ private struct MainWindowView: View {
                 onCancelAuth: onCancelAuth,
                 onRefreshProviders: onRefreshAssistantProviders,
                 onSetDictationEnabled: onSetDictationEnabled,
+                onSetDictationShortcut: onSetDictationShortcut,
+                onSetDictationShortcutRecording: onSetDictationShortcutRecording,
                 onRequestDictationAccessibility: onRequestDictationAccessibility,
                 onOpenAccessibilitySettings: onOpenAccessibilitySettings,
                 onSelectEngine: onSelectEngineOption,
@@ -1130,6 +1138,8 @@ private struct ApplicationSettingsSheet: View {
     let onCancelAuth: () -> Void
     let onRefreshProviders: () -> Void
     let onSetDictationEnabled: (Bool) -> Void
+    let onSetDictationShortcut: (DictationShortcut) -> Void
+    let onSetDictationShortcutRecording: (Bool) -> Void
     let onRequestDictationAccessibility: () -> Void
     let onOpenAccessibilitySettings: () -> Void
     let onSelectEngine: (String) -> Void
@@ -1177,6 +1187,8 @@ private struct ApplicationSettingsSheet: View {
                     model: dictationModel,
                     statusModel: statusModel,
                     onSetEnabled: onSetDictationEnabled,
+                    onSetShortcut: onSetDictationShortcut,
+                    onSetShortcutRecording: onSetDictationShortcutRecording,
                     onRequestAccessibility: onRequestDictationAccessibility,
                     onOpenAccessibilitySettings: onOpenAccessibilitySettings
                 )
@@ -1498,6 +1510,8 @@ private struct DictationSettingsView: View {
     @ObservedObject var model: DictationSettingsModel
     @ObservedObject var statusModel: StatusModel
     let onSetEnabled: (Bool) -> Void
+    let onSetShortcut: (DictationShortcut) -> Void
+    let onSetShortcutRecording: (Bool) -> Void
     let onRequestAccessibility: () -> Void
     let onOpenAccessibilitySettings: () -> Void
 
@@ -1519,11 +1533,11 @@ private struct DictationSettingsView: View {
                     set: { value in onSetEnabled(value) }
                 )) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(conversationLanguage.text("Enable ⌘E dictation", spanish: "Activar dictado con ⌘E"))
+                        Text(conversationLanguage.text("Enable local dictation", spanish: "Activar dictado local"))
                             .font(.headline)
                         Text(conversationLanguage.text(
-                            "Press once to listen. Press again to transcribe and insert.",
-                            spanish: "Presiona una vez para escuchar. Presiona de nuevo para transcribir e insertar."
+                            "Hold the shortcut to record. Release it to transcribe and insert.",
+                            spanish: "Mantén presionado el atajo para grabar. Suéltalo para transcribir e insertar."
                         ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1531,20 +1545,29 @@ private struct DictationSettingsView: View {
                 }
                 .toggleStyle(.switch)
 
-                HStack(spacing: 14) {
-                    keycap("⌘")
-                    Text("+").foregroundStyle(.secondary)
-                    keycap("E")
+                HStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(conversationLanguage.text("Global shortcut", spanish: "Atajo global"))
                             .font(.headline)
                         Text(conversationLanguage.text(
-                            "Works while another app has keyboard focus.",
-                            spanish: "Funciona mientras otra app tiene el foco del teclado."
+                            "Click the shortcut, then press your preferred key combination.",
+                            spanish: "Haz clic en el atajo y luego presiona la combinación que prefieras."
                         ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    ShortcutRecorder(
+                        shortcut: model.shortcut,
+                        isEnabled: !model.phase.isBusy,
+                        onChange: onSetShortcut,
+                        onRecordingChanged: onSetShortcutRecording
+                    )
+                    .frame(width: 170, height: 36)
+                    Button(conversationLanguage.text("Reset", spanish: "Restablecer")) {
+                        onSetShortcut(.defaultValue)
+                    }
+                    .disabled(model.phase.isBusy || model.shortcut == .defaultValue)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1616,12 +1639,139 @@ private struct DictationSettingsView: View {
         }
     }
 
-    private func keycap(_ value: String) -> some View {
-        Text(value)
-            .font(.system(size: 17, weight: .semibold, design: .rounded))
-            .frame(width: 42, height: 36)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)) }
+}
+
+private struct ShortcutRecorder: NSViewRepresentable {
+    let shortcut: DictationShortcut
+    let isEnabled: Bool
+    let onChange: (DictationShortcut) -> Void
+    let onRecordingChanged: (Bool) -> Void
+
+    func makeNSView(context: Context) -> ShortcutRecorderButton {
+        let button = ShortcutRecorderButton()
+        button.onChange = onChange
+        button.onRecordingChanged = onRecordingChanged
+        button.shortcut = shortcut
+        button.isEnabled = isEnabled
+        return button
+    }
+
+    func updateNSView(_ button: ShortcutRecorderButton, context: Context) {
+        button.onChange = onChange
+        button.onRecordingChanged = onRecordingChanged
+        button.shortcut = shortcut
+        button.isEnabled = isEnabled
+    }
+
+    static func dismantleNSView(_ button: ShortcutRecorderButton, coordinator: ()) {
+        button.cancelRecording()
+    }
+}
+
+private final class ShortcutRecorderButton: NSButton {
+    var onChange: ((DictationShortcut) -> Void)?
+    var onRecordingChanged: ((Bool) -> Void)?
+    var shortcut = DictationShortcut.defaultValue {
+        didSet { if !isRecording { title = shortcut.displayName } }
+    }
+    private var isRecording = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        bezelStyle = .rounded
+        setButtonType(.momentaryPushIn)
+        font = .monospacedSystemFont(ofSize: 14, weight: .semibold)
+        title = shortcut.displayName
+        toolTip = conversationLanguage.text(
+            "Click, then type a shortcut. Press Escape to cancel.",
+            spanish: "Haz clic y escribe un atajo. Presiona Escape para cancelar."
+        )
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        isRecording = true
+        onRecordingChanged?(true)
+        title = conversationLanguage.text("Type shortcut…", spanish: "Escribe el atajo…")
+        window?.makeFirstResponder(self)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if capture(event) { return }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        isRecording ? capture(event) : super.performKeyEquivalent(with: event)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        cancelRecording()
+        return super.resignFirstResponder()
+    }
+
+    func cancelRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        title = shortcut.displayName
+        onRecordingChanged?(false)
+    }
+
+    private func capture(_ event: NSEvent) -> Bool {
+        guard isRecording, event.type == .keyDown else { return false }
+        if event.keyCode == 53 {
+            cancelRecording()
+            window?.makeFirstResponder(nil)
+            return true
+        }
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var modifiers: DictationShortcutModifiers = []
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        guard !modifiers.isEmpty, let keyLabel = Self.keyLabel(for: event) else {
+            NSSound.beep()
+            return true
+        }
+
+        let value = DictationShortcut(
+            keyCode: UInt32(event.keyCode),
+            modifiers: modifiers,
+            keyLabel: keyLabel
+        )
+        guard value.isValid else {
+            NSSound.beep()
+            return true
+        }
+        shortcut = value
+        isRecording = false
+        title = value.displayName
+        onChange?(value)
+        onRecordingChanged?(false)
+        window?.makeFirstResponder(nil)
+        return true
+    }
+
+    private static func keyLabel(for event: NSEvent) -> String? {
+        let special: [UInt16: String] = [
+            36: "↩", 48: "⇥", 49: "Space", 51: "⌫", 71: "Clear",
+            76: "⌤", 115: "Home", 116: "Page↑", 117: "⌦", 119: "End",
+            121: "Page↓", 123: "←", 124: "→", 125: "↓", 126: "↑",
+            122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5",
+            97: "F6", 98: "F7", 100: "F8", 101: "F9", 109: "F10",
+            103: "F11", 111: "F12",
+        ]
+        if let value = special[event.keyCode] { return value }
+        guard let characters = event.charactersIgnoringModifiers?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !characters.isEmpty else { return nil }
+        return String(characters.prefix(1)).uppercased()
     }
 }
 

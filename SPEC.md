@@ -47,7 +47,7 @@ Important boundary:
 - Simultaneously capture system audio and microphone audio.
 - Transcribe captured audio in real time using a swappable transcription engine.
 - Optionally reuse the selected local transcription engine for global, microphone-only
-  dictation into the focused text field through a configurable `Command-E` shortcut.
+  dictation into the focused text field through a configurable global shortcut.
 - Display a live transcript and conversation workspace during the call.
 - Present the interface in English or Spanish according to the primary macOS
   language, with English as the fallback for unsupported languages.
@@ -141,9 +141,13 @@ Important boundary:
 
 12. `Global Dictation Controller`
 
-  - Registers `Command-E` only after the user enables global dictation in Settings.
+  - Registers the user-configured shortcut (default `Command-E`) only after global
+    dictation is enabled in Settings.
+  - Starts microphone capture when the shortcut is pressed, buffers audio while a
+    cold local model loads, and transcribes/inserts when the shortcut is released.
   - Captures microphone audio only and runs the engine selected for transcription.
-  - Inserts the resulting text at the focused insertion point through macOS Accessibility.
+  - Retains the original focused insertion target and inserts through macOS
+    Accessibility, with compatible value/range and Unicode-event fallbacks.
   - MUST NOT create a recording session, transcript file, or assistant request.
   - MUST refuse to start while a meeting session is active.
 
@@ -604,6 +608,8 @@ accepted from its JSON file; they belong exclusively in the credential store.
   selection UI SHOULD expose or link to the applicable policy when available.
 - Global dictation audio MUST remain in memory, MUST use microphone input only,
   and MUST NOT be persisted or sent to an assistant provider.
+- Global dictation MUST capture from shortcut press through shortcut release;
+  local model startup MUST NOT discard speech recorded during that interval.
 - Accessibility access MUST be used only to identify the focused writable control
   and insert the locally transcribed result requested by the user.
 

@@ -122,6 +122,20 @@ public final class PresentationCoordinator: Presenting {
             }
         }
     }
+    public var onSetDictationShortcut: ((DictationShortcut) -> Void)? {
+        didSet {
+            mainWindow.onSetDictationShortcut = { [weak self] shortcut in
+                self?.onSetDictationShortcut?(shortcut)
+            }
+        }
+    }
+    public var onSetDictationShortcutRecording: ((Bool) -> Void)? {
+        didSet {
+            mainWindow.onSetDictationShortcutRecording = { [weak self] recording in
+                self?.onSetDictationShortcutRecording?(recording)
+            }
+        }
+    }
     public var onRequestDictationAccessibility: (() -> Void)? {
         didSet {
             mainWindow.onRequestDictationAccessibility = { [weak self] in
@@ -288,13 +302,15 @@ public final class PresentationCoordinator: Presenting {
         phase: LocalDictationPhase,
         targetApplicationName: String?,
         engineName: String,
-        errorMessage: String?
+        errorMessage: String?,
+        shortcut: DictationShortcut
     ) {
         dictationModel.isEnabled = enabled
         dictationModel.accessibilityGranted = accessibilityGranted
         dictationModel.phase = phase
         dictationModel.targetApplicationName = targetApplicationName
         dictationModel.errorMessage = errorMessage
+        dictationModel.shortcut = shortcut
 
         if phase == .idle {
             dictationOverlay.hide()
@@ -303,6 +319,7 @@ public final class PresentationCoordinator: Presenting {
                 phase: phase,
                 engineName: engineName.isEmpty ? statusModel.selectedEngineOption?.title ?? "" : engineName,
                 targetApplicationName: targetApplicationName,
+                shortcut: shortcut,
                 message: errorMessage
             )
         }
