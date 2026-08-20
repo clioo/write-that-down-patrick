@@ -50,13 +50,17 @@ public final class PresentationCoordinator: Presenting {
     private let recordingPromptSurface = RecordingPromptSurface()
     private let outputDir: URL
     private let conversationAssistant: any ConversationAssistant
-    private let credentialStore: OpenCodeGoCredentialStore
-    private var assistantAPIKey: String?
     private var answerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var summaryTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var authTask: Task<Void, Never>?
     private var conversationGeneration = UUID()
 
-    private static let selectedAssistantModelKey = "openCodeGoAssistantModel"
+    private var authPromptContinuation: CheckedContinuation<String, Error>?
+
+    private static let selectedAssistantProviderKey = "piAssistantProvider"
+    private static func selectedAssistantModelKey(providerID: String) -> String {
+        "piAssistantModel.\(providerID)"
+    }
 
     /// Wired to the orchestrator's non-blocking ambiguous-source decision APIs.
     public var onAcceptRecordingPrompt: ((UUID) -> Void)? {
@@ -113,13 +117,11 @@ public final class PresentationCoordinator: Presenting {
     public init(
         outputDir: URL,
         notifications: NotificationService = NotificationService(),
-        conversationAssistant: any ConversationAssistant = PiOpenCodeGoAssistant(),
-        credentialStore: OpenCodeGoCredentialStore = OpenCodeGoCredentialStore()
+        conversationAssistant: any ConversationAssistant = PiConversationAssistant()
     ) {
         self.outputDir = outputDir
         self.notifications = notifications
         self.conversationAssistant = conversationAssistant
-        self.credentialStore = credentialStore
         let captionModel = CaptionModel()
         let statusModel = StatusModel()
         let workspaceModel = ConversationWorkspaceModel()
@@ -156,9 +158,16 @@ public final class PresentationCoordinator: Presenting {
         self.mainWindow.onSelectAssistantModel = { [weak self] id in
             self?.selectAssistantModel(id)
         }
-        self.mainWindow.onSaveAssistantAPIKey = { [weak self] key in
-            self?.saveAssistantAPIKey(key)
+        self.mainWindow.onSelectAssistantProvider = { [weak self] id in self?.selectAssistantProvider(id) }
+        self.mainWindow.onConnectAssistantProvider = { [weak self] provider, authType in
+            self?.connectAssistantProvider(providerID: provider, authType: authType)
         }
+        self.mainWindow.onDisconnectAssistantProvider = { [weak self] provider in
+            self?.disconnectAssistantProvider(providerID: provider)
+        }
+        self.mainWindow.onSubmitAuthPrompt = { [weak self] value in self?.submitAuthPrompt(value) }
+        self.mainWindow.onCancelAuth = { [weak self] in self?.cancelAuth() }
+        self.mainWindow.onRefreshAssistantProviders = { [weak self] in self?.refreshAssistantProviders() }
         self.mainWindow.onSelectConversation = { [weak self] id in
             self?.selectConversation(id: id)
         }
@@ -364,7 +373,11 @@ public final class PresentationCoordinator: Presenting {
         // Keychain, UserDefaults, or Finder.
         mainWindow.onAsk = { _ in }
         mainWindow.onSelectAssistantModel = { _ in }
-        mainWindow.onSaveAssistantAPIKey = { _ in }
+        mainWindow.onConnectAssistantProvider = { _, _ in }
+        mainWindow.onDisconnectAssistantProvider = { _ in }
+        mainWindow.onSubmitAuthPrompt = { _ in }
+        mainWindow.onCancelAuth = {}
+        mainWindow.onRefreshAssistantProviders = {}
         mainWindow.onOpenFolder = {}
 
         let startedAt = Self.previewStartedAt
@@ -400,13 +413,20 @@ public final class PresentationCoordinator: Presenting {
         ].forEach(captionModel.appendFinal)
         statusModel.hasSessionContent = true
         for workspace in conversationLibrary.allWorkspaces {
-            workspace.isConfigured = true
-            workspace.setAssistantModels(
-                [
-                    .init(id: "gpt-5.6-luna", title: "GPT-5.6 Luna", detail: "OpenCode Go"),
-                    .init(id: "glm-5.2", title: "GLM-5.2", detail: "OpenCode Go"),
-                ],
-                selectedID: "gpt-5.6-luna"
+            workspace.setAssistantProviders(
+                [PiProviderOption(
+                    id: "opencode-go",
+                    name: "OpenCode Go",
+                    authMethods: [.init(kind: .apiKey, name: "OpenCode API key")],
+                    models: [
+                        .init(id: "gpt-5.6-luna", title: "GPT-5.6 Luna"),
+                        .init(id: "glm-5.2", title: "GLM-5.2"),
+                    ],
+                    isConfigured: true,
+                    configuredAuthType: .apiKey
+                )],
+                selectedProviderID: "opencode-go",
+                selectedModelID: "gpt-5.6-luna"
             )
         }
         return startedAt
@@ -547,71 +567,64 @@ public final class PresentationCoordinator: Presenting {
         )
     }
 
-    // MARK: OpenCode Go meeting assistant
+    // MARK: Pi provider meeting assistant
 
     private func installAssistantConfiguration() {
-        let fallback = PiOpenCodeGoAssistant.fallbackModels.map {
-            ConversationWorkspaceModel.AssistantModel(
-                id: $0.id,
-                title: $0.title,
-                detail: "OpenCode Go"
-            )
-        }
-        let preferred = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey)
-            ?? PiOpenCodeGoAssistant.defaultModelID
+        refreshAssistantProviders()
+    }
+
+    private func refreshAssistantProviders() {
         for workspace in conversationLibrary.allWorkspaces {
-            workspace.setAssistantModels(fallback, selectedID: preferred)
+            workspace.isLoadingProviders = true
+            workspace.configurationError = nil
         }
-
-        do {
-            assistantAPIKey = try credentialStore.loadAPIKey()
-            synchronizeAssistantConfiguration(error: nil)
-        } catch {
-            assistantAPIKey = nil
-            synchronizeAssistantConfiguration(error: error.localizedDescription)
-        }
-
-        if assistantAPIKey?.isEmpty == false {
-            refreshAssistantModels()
-        }
-    }
-
-    private func saveAssistantAPIKey(_ rawKey: String) {
-        do {
-            try credentialStore.saveAPIKey(rawKey)
-            assistantAPIKey = try credentialStore.loadAPIKey()
-            synchronizeAssistantConfiguration(error: nil)
-            refreshAssistantModels()
-        } catch {
-            assistantAPIKey = nil
-            synchronizeAssistantConfiguration(error: error.localizedDescription)
-        }
-    }
-
-    private func refreshAssistantModels() {
-        guard let apiKey = assistantAPIKey, !apiKey.isEmpty else { return }
         let assistant = conversationAssistant
         Task { [weak self] in
             do {
-                let models = try await assistant.availableModels(apiKey: apiKey)
+                let providers = try await assistant.providerCatalog()
                 guard let self else { return }
-                let options = models.map {
-                    ConversationWorkspaceModel.AssistantModel(
-                        id: $0.id,
-                        title: $0.title,
-                        detail: "OpenCode Go"
-                    )
-                }
-                let preferred = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey)
-                    ?? PiOpenCodeGoAssistant.defaultModelID
-                for workspace in self.conversationLibrary.allWorkspaces {
-                    workspace.setAssistantModels(options, selectedID: preferred)
-                    workspace.configurationError = nil
-                }
+                self.applyAssistantCatalog(providers)
             } catch {
-                self?.synchronizeAssistantConfiguration(error: error.localizedDescription)
+                guard let self else { return }
+                for workspace in self.conversationLibrary.allWorkspaces {
+                    workspace.isLoadingProviders = false
+                    workspace.configurationError = error.localizedDescription
+                    workspace.isConfigured = false
+                }
             }
         }
+    }
+
+    private func applyAssistantCatalog(_ providers: [PiProviderOption]) {
+        let preferredProvider = UserDefaults.standard.string(forKey: Self.selectedAssistantProviderKey)
+            ?? PiConversationAssistant.defaultProviderID
+        let selectedProvider = providers.first(where: { $0.id == preferredProvider })
+            ?? providers.first(where: { $0.isConfigured })
+            ?? providers.first
+        let preferredModel = selectedProvider.flatMap {
+            UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey(providerID: $0.id))
+        }
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.isLoadingProviders = false
+            workspace.isConnectingProvider = false
+            workspace.pendingAuthPrompt = nil
+            workspace.authStatusMessage = nil
+            workspace.configurationError = nil
+            workspace.setAssistantProviders(
+                providers,
+                selectedProviderID: selectedProvider?.id,
+                selectedModelID: preferredModel
+            )
+        }
+    }
+
+    private func selectAssistantProvider(_ id: String) {
+        guard conversationLibrary.selectedWorkspace.assistantProviders.contains(where: { $0.id == id }) else { return }
+        let preferredModel = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey(providerID: id))
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.selectAssistantProvider(id, selectedModelID: preferredModel)
+        }
+        UserDefaults.standard.set(id, forKey: Self.selectedAssistantProviderKey)
     }
 
     private func selectAssistantModel(_ id: String) {
@@ -620,22 +633,135 @@ public final class PresentationCoordinator: Presenting {
         where workspace.assistantModels.contains(where: { $0.id == id }) {
             workspace.selectedAssistantModelID = id
         }
-        UserDefaults.standard.set(id, forKey: Self.selectedAssistantModelKey)
+        let providerID = conversationLibrary.selectedWorkspace.selectedAssistantProviderID
+        UserDefaults.standard.set(id, forKey: Self.selectedAssistantModelKey(providerID: providerID))
     }
 
     private func synchronizeAssistantConfiguration(error: String? = nil) {
-        let configured = assistantAPIKey?.isEmpty == false
-        let sourceModels = workspaceModel.assistantModels.isEmpty
-            ? PiOpenCodeGoAssistant.fallbackModels.map {
-                ConversationWorkspaceModel.AssistantModel(id: $0.id, title: $0.title, detail: "OpenCode Go")
-            }
-            : workspaceModel.assistantModels
-        let preferred = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey)
+        let providers = workspaceModel.assistantProviders
+        let selectedProvider = workspaceModel.selectedAssistantProviderID
+        let preferred = UserDefaults.standard.string(forKey: Self.selectedAssistantModelKey(providerID: selectedProvider))
             ?? workspaceModel.selectedAssistantModelID
         for workspace in conversationLibrary.allWorkspaces {
-            workspace.isConfigured = configured
             workspace.configurationError = error
-            workspace.setAssistantModels(sourceModels, selectedID: preferred)
+            workspace.setAssistantProviders(
+                providers,
+                selectedProviderID: selectedProvider,
+                selectedModelID: preferred
+            )
+        }
+    }
+
+    private func connectAssistantProvider(providerID: String, authType: PiProviderAuthMethod.Kind) {
+        cancelAuth()
+        selectAssistantProvider(providerID)
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.isConnectingProvider = true
+            workspace.configurationError = nil
+            workspace.authStatusMessage = presentationLanguage.text(
+                "Starting sign-in…",
+                spanish: "Iniciando sesión…"
+            )
+        }
+        let assistant = conversationAssistant
+        authTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await assistant.connect(
+                    providerID: providerID,
+                    authType: authType,
+                    interaction: PiProviderAuthInteraction(
+                        prompt: { [weak self] prompt in
+                            guard let self else { throw ConversationAssistantError.cancelled }
+                            return try await self.requestAuthPrompt(prompt)
+                        },
+                        notify: { [weak self] event in
+                            await self?.handleAuthEvent(event)
+                        }
+                    )
+                )
+                self.refreshAssistantProviders()
+                self.authTask = nil
+            } catch {
+                self.authPromptContinuation?.resume(throwing: ConversationAssistantError.cancelled)
+                self.authPromptContinuation = nil
+                for workspace in self.conversationLibrary.allWorkspaces {
+                    workspace.isConnectingProvider = false
+                    workspace.pendingAuthPrompt = nil
+                    workspace.configurationError = error.localizedDescription
+                }
+                self.authTask = nil
+            }
+        }
+    }
+
+    private func disconnectAssistantProvider(providerID: String) {
+        let assistant = conversationAssistant
+        Task { [weak self] in
+            do {
+                try await assistant.disconnect(providerID: providerID)
+                self?.refreshAssistantProviders()
+            } catch {
+                self?.synchronizeAssistantConfiguration(error: error.localizedDescription)
+            }
+        }
+    }
+
+    private func requestAuthPrompt(_ prompt: PiAuthPrompt) async throws -> String {
+        authPromptContinuation?.resume(throwing: ConversationAssistantError.cancelled)
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.pendingAuthPrompt = prompt
+            workspace.authStatusMessage = prompt.message
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            authPromptContinuation = continuation
+        }
+    }
+
+    private func submitAuthPrompt(_ value: String) {
+        guard let continuation = authPromptContinuation else { return }
+        authPromptContinuation = nil
+        for workspace in conversationLibrary.allWorkspaces { workspace.pendingAuthPrompt = nil }
+        continuation.resume(returning: value)
+    }
+
+    private func cancelAuth() {
+        authTask?.cancel()
+        authTask = nil
+        authPromptContinuation?.resume(throwing: ConversationAssistantError.cancelled)
+        authPromptContinuation = nil
+        for workspace in conversationLibrary.allWorkspaces {
+            workspace.pendingAuthPrompt = nil
+            workspace.isConnectingProvider = false
+            workspace.authStatusMessage = nil
+        }
+    }
+
+    private func handleAuthEvent(_ event: PiAuthEvent) {
+        switch event {
+        case let .info(message, links):
+            for workspace in conversationLibrary.allWorkspaces { workspace.authStatusMessage = message }
+            if let url = links.first?.url { NSWorkspace.shared.open(url) }
+        case let .authURL(url, instructions):
+            for workspace in conversationLibrary.allWorkspaces {
+                workspace.authStatusMessage = instructions ?? presentationLanguage.text(
+                    "Finish signing in in your browser.",
+                    spanish: "Termina de iniciar sesión en tu navegador."
+                )
+            }
+            NSWorkspace.shared.open(url)
+        case let .deviceCode(code, verificationURL, _):
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+            for workspace in conversationLibrary.allWorkspaces {
+                workspace.authStatusMessage = presentationLanguage.text(
+                    "Code \(code) copied. Finish signing in in your browser.",
+                    spanish: "Código \(code) copiado. Termina de iniciar sesión en tu navegador."
+                )
+            }
+            NSWorkspace.shared.open(verificationURL)
+        case let .progress(message):
+            for workspace in conversationLibrary.allWorkspaces { workspace.authStatusMessage = message }
         }
     }
 
@@ -645,9 +771,10 @@ public final class PresentationCoordinator: Presenting {
             ?? captionModel.fullTranscriptText
         let question = rawQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
-        guard let apiKey = assistantAPIKey, !apiKey.isEmpty else {
-            workspace.configurationError = ConversationAssistantError.missingAPIKey.localizedDescription
-            workspace.isConfigured = false
+        guard let provider = workspace.selectedAssistantProvider, provider.isConfigured else {
+            workspace.configurationError = ConversationAssistantError
+                .missingCredential(workspace.selectedAssistantProvider?.name ?? "AI provider")
+                .localizedDescription
             return
         }
         guard !transcript.isEmpty else {
@@ -660,7 +787,7 @@ public final class PresentationCoordinator: Presenting {
         guard !workspace.isAnswering else { return }
 
         let modelID = workspace.selectedAssistantModelID.isEmpty
-            ? PiOpenCodeGoAssistant.defaultModelID
+            ? (provider.models.first?.id ?? PiConversationAssistant.defaultModelID)
             : workspace.selectedAssistantModelID
         let priorConversation = workspace.messages.compactMap { message -> ConversationAssistantTurn? in
             guard message.errorMessage == nil, !message.content.isEmpty else { return nil }
@@ -682,8 +809,8 @@ public final class PresentationCoordinator: Presenting {
                     transcript: transcript,
                     conversation: priorConversation,
                     question: question,
-                    modelID: modelID,
-                    apiKey: apiKey
+                    providerID: provider.id,
+                    modelID: modelID
                 )
                 guard let self, self.conversationGeneration == generation else { return }
                 workspace.appendAssistantDelta(answer, to: responseID)
@@ -723,9 +850,10 @@ public final class PresentationCoordinator: Presenting {
         transcriptPath: String?,
         workspace: ConversationWorkspaceModel
     ) {
-        guard let apiKey = assistantAPIKey, !apiKey.isEmpty else {
-            workspace.configurationError = ConversationAssistantError.missingAPIKey.localizedDescription
-            workspace.isConfigured = false
+        guard let provider = workspace.selectedAssistantProvider, provider.isConfigured else {
+            workspace.configurationError = ConversationAssistantError
+                .missingCredential(workspace.selectedAssistantProvider?.name ?? "AI provider")
+                .localizedDescription
             return
         }
         guard !transcript.isEmpty else {
@@ -733,7 +861,7 @@ public final class PresentationCoordinator: Presenting {
             return
         }
         let modelID = workspace.selectedAssistantModelID.isEmpty
-            ? PiOpenCodeGoAssistant.defaultModelID
+            ? (provider.models.first?.id ?? PiConversationAssistant.defaultModelID)
             : workspace.selectedAssistantModelID
         let generation = conversationGeneration
         let assistant = conversationAssistant
@@ -745,8 +873,8 @@ public final class PresentationCoordinator: Presenting {
             do {
                 let summary = try await assistant.summarize(
                     transcript: transcript,
-                    modelID: modelID,
-                    apiKey: apiKey
+                    providerID: provider.id,
+                    modelID: modelID
                 )
                 guard let self, self.conversationGeneration == generation else { return }
                 workspace.completeSummary(summary)

@@ -85,4 +85,35 @@ final class ConversationWorkspaceModelTests: XCTestCase {
 
         XCTAssertEqual(model.selectedAssistantModel?.id, "glm-5.2")
     }
+
+    @MainActor
+    func testProviderSelectionUpdatesConnectionAndModels() {
+        let model = ConversationWorkspaceModel()
+        let providers = [
+            PiProviderOption(
+                id: "opencode-go",
+                name: "OpenCode Go",
+                authMethods: [.init(kind: .apiKey, name: "API key")],
+                models: [.init(id: "go-model", title: "Go Model")],
+                isConfigured: false
+            ),
+            PiProviderOption(
+                id: "openai-codex",
+                name: "OpenAI Codex",
+                authMethods: [.init(kind: .oauth, name: "ChatGPT", isSubscription: true)],
+                models: [.init(id: "gpt-model", title: "GPT Model")],
+                isConfigured: true,
+                configuredAuthType: .oauth
+            ),
+        ]
+
+        model.setAssistantProviders(providers, selectedProviderID: "openai-codex", selectedModelID: "gpt-model")
+        XCTAssertTrue(model.isConfigured)
+        XCTAssertEqual(model.selectedAssistantProviderID, "openai-codex")
+        XCTAssertEqual(model.selectedAssistantModelID, "gpt-model")
+
+        model.selectAssistantProvider("opencode-go")
+        XCTAssertFalse(model.isConfigured)
+        XCTAssertEqual(model.selectedAssistantModelID, "go-model")
+    }
 }

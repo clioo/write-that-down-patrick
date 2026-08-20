@@ -3,22 +3,22 @@ import Foundation
 /// A deliberately narrow Pi integration for meeting Q&A.
 ///
 /// Every request launches Pi in one-shot JSON mode with:
-/// - the provider pinned to `opencode-go`;
+/// - the provider and model explicitly selected from Pi's built-in catalog;
 /// - no tools, extensions, skills, prompt templates, context files, or session;
 /// - a private runtime directory that does not read the user's Pi setup.
 ///
 /// The transcript is delivered over stdin rather than a command-line argument,
 /// which avoids leaking it through process listings and supports long meetings.
-public actor PiOpenCodeGoAssistant: ConversationAssistant {
+public actor PiConversationAssistant: ConversationAssistant {
+    public static let defaultProviderID = "opencode-go"
     public static let defaultModelID = "gpt-5.6-luna"
-    public static let fallbackModels: [OpenCodeGoModelOption] = [
+    public static let fallbackModels: [PiAssistantModelOption] = [
         .init(id: "gpt-5.6-luna", title: "GPT-5.6 Luna"),
         .init(id: "glm-5.2", title: "GLM-5.2"),
         .init(id: "kimi-k2.6", title: "Kimi K2.6"),
         .init(id: "qwen3.7-plus", title: "Qwen3.7 Plus"),
     ]
 
-    private static let provider = "opencode-go"
     private static let maxTranscriptCharacters = 700_000
     private static let maxHistoryTurns = 12
     private static let maxOutputBytes = 8 * 1_024 * 1_024
@@ -26,48 +26,49 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
     private let piExecutable: URL?
     private let runtimeDirectory: URL
     private let requestTimeout: TimeInterval
+    private let credentialStore: PiProviderCredentialStore
+    private let providerBridge: PiProviderBridge
 
     public init(
         piExecutable: URL? = nil,
         runtimeDirectory: URL? = nil,
+        credentialStore: PiProviderCredentialStore = PiProviderCredentialStore(),
         requestTimeout: TimeInterval = 120
     ) {
-        self.piExecutable = piExecutable ?? Self.resolvePiExecutable()
+        let resolvedPi = piExecutable ?? Self.resolvePiExecutable()
+        self.piExecutable = resolvedPi
         self.runtimeDirectory = runtimeDirectory ?? Self.defaultRuntimeDirectory
+        self.credentialStore = credentialStore
+        self.providerBridge = PiProviderBridge(
+            piExecutable: resolvedPi,
+            credentialStore: credentialStore
+        )
         self.requestTimeout = max(5, requestTimeout)
     }
 
-    public func availableModels(apiKey: String) async throws -> [OpenCodeGoModelOption] {
-        let key = try Self.validatedKey(apiKey)
-        guard let executable = piExecutable else { throw ConversationAssistantError.piNotInstalled }
+    public func providerCatalog() async throws -> [PiProviderOption] {
+        try credentialStore.migrateLegacyOpenCodeGoKeyIfNeeded()
+        return try await providerBridge.catalog()
+    }
 
-        do {
-            let result = try Self.runPi(
-                executable: executable,
-                arguments: Self.baseArguments + ["--list-models", Self.provider],
-                stdin: "",
-                apiKey: key,
-                runtimeDirectory: runtimeDirectory,
-                timeout: requestTimeout
-            )
-            guard result.exitCode == 0 else {
-                throw ConversationAssistantError.requestFailed(Self.conciseError(result.stderr))
-            }
-            let discovered = Self.parseModelList(result.stdout)
-            return discovered.isEmpty ? Self.fallbackModels : discovered
-        } catch let error as ConversationAssistantError {
-            throw error
-        } catch {
-            throw ConversationAssistantError.launchFailed(error.localizedDescription)
-        }
+    public func connect(
+        providerID: String,
+        authType: PiProviderAuthMethod.Kind,
+        interaction: PiProviderAuthInteraction
+    ) async throws {
+        try await providerBridge.connect(providerID: providerID, authType: authType, interaction: interaction)
+    }
+
+    public func disconnect(providerID: String) async throws {
+        try await providerBridge.disconnect(providerID: providerID)
     }
 
     public func answer(
         transcript: String,
         conversation: [ConversationAssistantTurn],
         question: String,
-        modelID: String,
-        apiKey: String
+        providerID: String,
+        modelID: String
     ) async throws -> String {
         let cleanQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanQuestion.isEmpty else {
@@ -78,22 +79,25 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
             conversation: conversation,
             question: cleanQuestion
         )
-        return try perform(prompt: prompt, modelID: modelID, apiKey: apiKey)
+        return try perform(prompt: prompt, providerID: providerID, modelID: modelID)
     }
 
     public func summarize(
         transcript: String,
-        modelID: String,
-        apiKey: String
+        providerID: String,
+        modelID: String
     ) async throws -> String {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "No hubo suficiente conversación para generar un resumen." }
-        return try perform(prompt: Self.summaryPrompt(transcript: trimmed), modelID: modelID, apiKey: apiKey)
+        return try perform(prompt: Self.summaryPrompt(transcript: trimmed), providerID: providerID, modelID: modelID)
     }
 
-    private func perform(prompt: String, modelID: String, apiKey: String) throws -> String {
-        let key = try Self.validatedKey(apiKey)
+    private func perform(prompt: String, providerID: String, modelID: String) throws -> String {
+        let provider = try Self.validatedProviderID(providerID)
         let model = try Self.validatedModelID(modelID)
+        guard try credentialStore.credentialData(for: provider) != nil else {
+            throw ConversationAssistantError.missingCredential(provider)
+        }
         guard let executable = piExecutable else { throw ConversationAssistantError.piNotInstalled }
 
         let result: PiRunResult
@@ -103,13 +107,14 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
                 arguments: Self.baseArguments + [
                     "--mode", "json",
                     "--print",
-                    "--provider", Self.provider,
+                    "--provider", provider,
                     "--model", model,
                     "--thinking", "low",
                     "--system-prompt", Self.systemPrompt,
                 ],
                 stdin: prompt,
-                apiKey: key,
+                providerID: provider,
+                credentialStore: credentialStore,
                 runtimeDirectory: runtimeDirectory,
                 timeout: requestTimeout
             )
@@ -201,7 +206,8 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         executable: URL,
         arguments: [String],
         stdin: String,
-        apiKey: String,
+        providerID: String,
+        credentialStore: PiProviderCredentialStore,
         runtimeDirectory: URL,
         timeout: TimeInterval
     ) throws -> PiRunResult {
@@ -209,6 +215,7 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         try fm.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
         let scratch = fm.temporaryDirectory.appendingPathComponent("wtd-pi-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scratch.path)
         defer { try? fm.removeItem(at: scratch) }
 
         // Pi's configuration directory is unique per request. This prevents a
@@ -218,6 +225,8 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         let sessionDirectory = scratch.appendingPathComponent("sessions", isDirectory: true)
         try fm.createDirectory(at: agentDirectory, withIntermediateDirectories: true)
         try fm.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let authFile = agentDirectory.appendingPathComponent("auth.json")
+        try credentialStore.exportAuthFile(to: authFile, providerID: providerID)
 
         let stdoutURL = scratch.appendingPathComponent("stdout")
         let stderrURL = scratch.appendingPathComponent("stderr")
@@ -238,8 +247,11 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         process.standardInput = inputPipe
         process.standardOutput = stdoutHandle
         process.standardError = stderrHandle
-        var environment = ProcessInfo.processInfo.environment
-        environment["OPENCODE_API_KEY"] = apiKey
+        var environment: [String: String] = [
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+            "TMPDIR": NSTemporaryDirectory(),
+            "LANG": ProcessInfo.processInfo.environment["LANG"] ?? "en_US.UTF-8",
+        ]
         environment["PI_CODING_AGENT_DIR"] = agentDirectory.path
         environment["PI_CODING_AGENT_SESSION_DIR"] = sessionDirectory.path
         environment["PI_OFFLINE"] = "1"
@@ -290,6 +302,9 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         guard stdoutData.count <= maxOutputBytes, stderrData.count <= maxOutputBytes else {
             throw ConversationAssistantError.invalidResponse
         }
+        // Pi may refresh an OAuth token while making the request. Persist the
+        // refreshed credential back into Keychain before deleting scratch.
+        try credentialStore.importCredential(from: authFile, providerID: providerID)
         return PiRunResult(
             exitCode: process.terminationStatus,
             stdout: String(decoding: stdoutData, as: UTF8.self),
@@ -330,14 +345,14 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         return finalText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func parseModelList(_ output: String) -> [OpenCodeGoModelOption] {
+    static func parseModelList(_ output: String, provider: String = defaultProviderID) -> [PiAssistantModelOption] {
         var seen = Set<String>()
         return output.split(separator: "\n").compactMap { line in
             let columns = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
             guard columns.count >= 2, columns[0] == Substring(provider) else { return nil }
             let id = String(columns[1])
             guard (try? validatedModelID(id)) != nil, seen.insert(id).inserted else { return nil }
-            return OpenCodeGoModelOption(id: id, title: friendlyTitle(for: id))
+            return PiAssistantModelOption(id: id, title: friendlyTitle(for: id))
         }
     }
 
@@ -351,20 +366,21 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         }.joined(separator: " ")
     }
 
-    private static func validatedKey(_ raw: String) throws -> String {
+    static func validatedProviderID(_ raw: String) throws -> String {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { throw ConversationAssistantError.missingAPIKey }
+        try PiProviderCredentialStore.validateProviderID(value)
         return value
     }
 
     static func validatedModelID(_ raw: String) throws -> String {
-        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("\(provider)/") { value.removeFirst(provider.count + 1) }
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-        let leading = CharacterSet.alphanumerics
-        guard let first = value.unicodeScalars.first,
-              leading.contains(first),
-              value.unicodeScalars.allSatisfy(allowed.contains)
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              value.count <= 300,
+              !value.hasPrefix("-"),
+              !value.unicodeScalars.contains(where: {
+                  CharacterSet.whitespacesAndNewlines.contains($0)
+                      || CharacterSet.controlCharacters.contains($0)
+              })
         else {
             throw ConversationAssistantError.invalidModel(raw)
         }
@@ -398,3 +414,7 @@ public actor PiOpenCodeGoAssistant: ConversationAssistant {
         return base.appendingPathComponent("WriteThatDown/PiRuntime", isDirectory: true)
     }
 }
+
+/// Source-compatible name for callers built against the original
+/// OpenCode-Go-only implementation.
+public typealias PiOpenCodeGoAssistant = PiConversationAssistant

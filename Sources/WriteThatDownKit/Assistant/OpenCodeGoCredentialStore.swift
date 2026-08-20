@@ -33,7 +33,7 @@ public final class OpenCodeGoCredentialStore: @unchecked Sendable {
 
     public func saveAPIKey(_ value: String) throws {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw ConversationAssistantError.missingAPIKey }
+        guard !trimmed.isEmpty else { throw ConversationAssistantError.missingCredential("OpenCode Go") }
         guard let data = trimmed.data(using: .utf8) else {
             throw ConversationAssistantError.requestFailed("The API key is not valid UTF-8.")
         }
