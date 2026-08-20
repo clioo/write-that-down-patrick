@@ -11,6 +11,7 @@ final class ConfigurationTests: XCTestCase {
         XCTAssertTrue(c.outputDir.path.hasSuffix("Transcripts"))
         XCTAssertFalse(c.outputDir.path.contains("~"))
         XCTAssertFalse(c.language.isEmpty)
+        XCTAssertEqual(c.speechModel, SpeechModelCatalog.parakeetTDTv3ID)
     }
 
     func testTildeExpansion() {
@@ -63,6 +64,7 @@ final class ConfigurationTests: XCTestCase {
 
     func testEngineKindRawValues() {
         XCTAssertEqual(EngineKind(rawValue: "default"), .default)
+        XCTAssertEqual(EngineKind(rawValue: "sherpa"), .sherpa)
         XCTAssertEqual(EngineKind(rawValue: "native"), .native)
         XCTAssertNil(EngineKind(rawValue: "bogus"))
     }
@@ -90,5 +92,29 @@ final class ConfigurationTests: XCTestCase {
         XCTAssertEqual(option.id, "native")
         XCTAssertEqual(option.engine, .native)
         XCTAssertEqual(option.title, "Apple Speech")
+    }
+
+    func testTranscriptionEngineOptionFromSherpaConfig() {
+        var c = AppConfiguration.default
+        c.engine = .sherpa
+        c.speechModel = SpeechModelCatalog.parakeetTDTv3ID
+
+        let option = TranscriptionEngineOption.from(c)
+
+        XCTAssertEqual(option.id, "sherpa:parakeet-tdt-0.6b-v3-int8")
+        XCTAssertEqual(option.engine, .sherpa)
+        XCTAssertEqual(option.title, "Parakeet TDT v3")
+        XCTAssertEqual(option.model, SpeechModelCatalog.parakeetTDTv3ID)
+        XCTAssertTrue(option.isDownloadable)
+        XCTAssertTrue(option.isRecommended)
+    }
+
+    func testSherpaValidationRejectsEmptySpeechModel() {
+        var c = AppConfiguration.default
+        c.engine = .sherpa
+        c.speechModel = "   "
+        XCTAssertThrowsError(try c.validated()) { error in
+            XCTAssertEqual(error as? ConfigurationError, .emptySpeechModel)
+        }
     }
 }

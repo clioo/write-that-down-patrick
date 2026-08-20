@@ -24,6 +24,16 @@ if let idx = CommandLine.arguments.firstIndex(of: "--download-model") {
     EngineSelfTest.runDownload(model: CommandLine.arguments[idx + 1])
 }
 
+// Headless self-test for a downloaded speech-model catalog entry. This loads
+// sherpa-onnx and runs local inference without starting the app UI.
+if let idx = CommandLine.arguments.firstIndex(of: "--check-speech-model") {
+    guard idx + 1 < CommandLine.arguments.count else {
+        FileHandle.standardError.write(Data("usage: WriteThatDown --check-speech-model <model-id>\n".utf8))
+        exit(2)
+    }
+    EngineSelfTest.runSpeechModel(modelID: CommandLine.arguments[idx + 1])
+}
+
 // Print the current TCC permission state AS SEEN BY THIS BINARY and exit.
 // Faithful for the installed app because TCC keys off the code signature.
 // Synchronous queries only — UNUserNotificationCenter hangs from a CLI run.
@@ -72,6 +82,8 @@ if CommandLine.arguments.contains("--print-config") {
     print("  start_confirm_ms: \(c.startConfirmMs)")
     print("  whisper_model:    \(c.whisperModel)")
     print("  model_folder:     \(c.whisperModelFolder?.path ?? "(none — will download on first run)")")
+    print("  speech_model:     \(c.speechModel)")
+    print("  speech_cache:     \(SpeechModelStore.defaultRootDirectory.path)")
     do {
         _ = try c.validated()
         print("  validation:       OK")

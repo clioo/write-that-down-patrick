@@ -19,6 +19,8 @@ public final class StatusSurface: NSObject {
     public var onToggleCaptions: (() -> Void)?
     public var onOpenFolder: (() -> Void)?
     public var onSelectEngineOption: ((String) -> Void)?
+    public var onDownloadEngineOption: ((String) -> Void)?
+    public var onDeleteEngineOption: ((String) -> Void)?
     public var onQuit: (() -> Void)?
 
     public init(model: StatusModel) {
@@ -53,6 +55,8 @@ public final class StatusSurface: NSObject {
                 onToggleCaptions: { [weak self] in self?.onToggleCaptions?() },
                 onOpenFolder: { [weak self] in self?.onOpenFolder?() },
                 onSelectEngineOption: { [weak self] id in self?.onSelectEngineOption?(id) },
+                onDownloadEngineOption: { [weak self] id in self?.onDownloadEngineOption?(id) },
+                onDeleteEngineOption: { [weak self] id in self?.onDeleteEngineOption?(id) },
                 onQuit: { [weak self] in self?.onQuit?() }
             )
         )

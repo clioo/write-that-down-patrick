@@ -697,4 +697,206 @@ final class SessionOrchestratorTests: XCTestCase {
 
         orchestrator.requestShutdown(); _ = await task.value
     }
+
+    // MARK: - Source-aware start policy and non-blocking confirmation
+
+    private func attributedSample(
+        bundleID: String,
+        applicationBundleID: String? = nil,
+        name: String,
+        title: String? = nil
+    ) -> MicActivitySample {
+        MicActivitySample(
+            isActive: true,
+            attribution: .attributed,
+            sources: [MicActivitySource(
+                pid: 99,
+                bundleID: bundleID,
+                applicationBundleID: applicationBundleID,
+                displayName: name,
+                windowTitle: title
+            )]
+        )
+    }
+
+    func testAmbiguousSourcePromptsOnceWithoutStartingPipeline() async {
+        let detector = MockMicSignalSource()
+        let capturer = MockAudioCapturer()
+        let engine = MockTranscriptionEngine()
+        let writer = MockTranscriptWriter()
+        let presenter = await makePresenter()
+        let permissions = MockPermissions(canStart: true)
+        let clock = TestClock()
+
+        let (orchestrator, task) = await startOrchestrator(
+            config: config(startConfirmMs: 0), detector: detector, capturer: capturer,
+            engine: engine, writer: writer, presenter: presenter,
+            permissions: permissions, clock: clock)
+
+        let whatsApp = attributedSample(
+            bundleID: "net.whatsapp.WhatsApp",
+            name: "WhatsApp"
+        )
+        detector.emit(whatsApp)
+        let prompted = await TestSupport.waitUntil { await presenter.recordingPrompts.count == 1 }
+        XCTAssertTrue(prompted)
+
+        // Repeated ticks from the same episode must not create repeated prompts.
+        detector.emit(whatsApp)
+        detector.emit(whatsApp)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let promptCount = await presenter.recordingPrompts.count
+        XCTAssertEqual(promptCount, 1)
+        let startCount = await engine.startCount
+        XCTAssertEqual(startCount, 0)
+        XCTAssertEqual(capturer.startCount, 0)
+        XCTAssertEqual(writer.beganCount, 0, "prompting must not create transcript garbage")
+
+        orchestrator.requestShutdown(); _ = await task.value
+    }
+
+    func testAcceptingAmbiguousPromptStartsExactlyOneSession() async {
+        let detector = MockMicSignalSource()
+        let capturer = MockAudioCapturer()
+        let engine = MockTranscriptionEngine()
+        let writer = MockTranscriptWriter()
+        let presenter = await makePresenter()
+        let permissions = MockPermissions(canStart: true)
+        let clock = TestClock()
+
+        let (orchestrator, task) = await startOrchestrator(
+            config: config(startConfirmMs: 0), detector: detector, capturer: capturer,
+            engine: engine, writer: writer, presenter: presenter,
+            permissions: permissions, clock: clock)
+
+        detector.emit(attributedSample(
+            bundleID: "com.openai.codex.helper",
+            name: "Codex"
+        ))
+        _ = await TestSupport.waitUntil { await presenter.recordingPrompts.count == 1 }
+        let prompt = await presenter.recordingPrompts[0]
+        orchestrator.acceptRecordingPrompt(prompt.id)
+
+        let recording = await TestSupport.waitUntil {
+            await orchestrator.snapshot().sessionStatus == .recording
+        }
+        XCTAssertTrue(recording)
+        let startCount = await engine.startCount
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(capturer.startCount, 1)
+        XCTAssertEqual(writer.beganCount, 1)
+        let hidden = await presenter.hiddenRecordingPromptIDs
+        XCTAssertEqual(hidden, [prompt.id])
+
+        orchestrator.requestShutdown(); _ = await task.value
+    }
+
+    func testDeclineSuppressesSameEpisodeUntilMicOffThenRearms() async {
+        let detector = MockMicSignalSource()
+        let capturer = MockAudioCapturer()
+        let engine = MockTranscriptionEngine()
+        let writer = MockTranscriptWriter()
+        let presenter = await makePresenter()
+        let permissions = MockPermissions(canStart: true)
+        let clock = TestClock()
+
+        let (orchestrator, task) = await startOrchestrator(
+            config: config(startConfirmMs: 0), detector: detector, capturer: capturer,
+            engine: engine, writer: writer, presenter: presenter,
+            permissions: permissions, clock: clock)
+
+        let source = attributedSample(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp")
+        detector.emit(source)
+        _ = await TestSupport.waitUntil { await presenter.recordingPrompts.count == 1 }
+        let first = await presenter.recordingPrompts[0]
+        orchestrator.declineRecordingPrompt(first.id)
+        _ = await TestSupport.waitUntil {
+            await presenter.hiddenRecordingPromptIDs.contains(first.id)
+        }
+
+        detector.emit(source)
+        detector.emit(source)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        var count = await presenter.recordingPrompts.count
+        XCTAssertEqual(count, 1, "decline must suppress the rest of this mic episode")
+        var startCount = await engine.startCount
+        XCTAssertEqual(startCount, 0)
+
+        detector.emit(.inactive)
+        detector.emit(source)
+        let rearmed = await TestSupport.waitUntil { await presenter.recordingPrompts.count == 2 }
+        XCTAssertTrue(rearmed, "mic-off must re-arm confirmation for the next episode")
+        count = await presenter.recordingPrompts.count
+        XCTAssertEqual(count, 2)
+        startCount = await engine.startCount
+        XCTAssertEqual(startCount, 0)
+
+        orchestrator.requestShutdown(); _ = await task.value
+    }
+
+    func testMicReleaseDismissesPromptAndStaleAcceptIsIgnored() async {
+        let detector = MockMicSignalSource()
+        let capturer = MockAudioCapturer()
+        let engine = MockTranscriptionEngine()
+        let writer = MockTranscriptWriter()
+        let presenter = await makePresenter()
+        let permissions = MockPermissions(canStart: true)
+        let clock = TestClock()
+
+        let (orchestrator, task) = await startOrchestrator(
+            config: config(startConfirmMs: 0), detector: detector, capturer: capturer,
+            engine: engine, writer: writer, presenter: presenter,
+            permissions: permissions, clock: clock)
+
+        detector.emit(attributedSample(bundleID: "com.example.voice", name: "Voice app"))
+        _ = await TestSupport.waitUntil { await presenter.recordingPrompts.count == 1 }
+        let prompt = await presenter.recordingPrompts[0]
+        detector.emit(.inactive)
+        _ = await TestSupport.waitUntil {
+            await presenter.hiddenRecordingPromptIDs.contains(prompt.id)
+        }
+        orchestrator.acceptRecordingPrompt(prompt.id)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let startCount = await engine.startCount
+        XCTAssertEqual(startCount, 0, "a response to a released source must be stale")
+        XCTAssertEqual(writer.beganCount, 0)
+
+        orchestrator.requestShutdown(); _ = await task.value
+    }
+
+    func testZoomAndVerifiedGoogleMeetStillAutoStart() async {
+        for source in [
+            attributedSample(bundleID: "us.zoom.xos", name: "Zoom"),
+            attributedSample(
+                bundleID: "com.brave.Browser.helper",
+                applicationBundleID: "com.brave.Browser",
+                name: "Brave Browser",
+                title: "Planning — Google Meet"
+            ),
+        ] {
+            let detector = MockMicSignalSource()
+            let capturer = MockAudioCapturer()
+            let engine = MockTranscriptionEngine()
+            let writer = MockTranscriptWriter()
+            let presenter = await makePresenter()
+            let permissions = MockPermissions(canStart: true)
+            let clock = TestClock()
+
+            let (orchestrator, task) = await startOrchestrator(
+                config: config(startConfirmMs: 0), detector: detector, capturer: capturer,
+                engine: engine, writer: writer, presenter: presenter,
+                permissions: permissions, clock: clock)
+            detector.emit(source)
+
+            let recording = await TestSupport.waitUntil {
+                await orchestrator.snapshot().sessionStatus == .recording
+            }
+            XCTAssertTrue(recording)
+            let promptCount = await presenter.recordingPrompts.count
+            XCTAssertEqual(promptCount, 0)
+
+            orchestrator.requestShutdown(); _ = await task.value
+        }
+    }
 }

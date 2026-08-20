@@ -6,10 +6,33 @@ import WriteThatDownKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var environment: AppEnvironment?
+    private var previewPresenter: PresentationCoordinator?
+    private var previewMode: PresentationPreviewMode?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu-bar only: no Dock icon, no main window (mirrors LSUIElement).
         NSApp.setActivationPolicy(.accessory)
+
+        if let previewMode = PresentationPreviewMode.current() {
+            // Keep screenshot comparisons deterministic and aligned with the
+            // approved light mockup without changing the normal app appearance.
+            NSApp.appearance = NSAppearance(named: .aqua)
+            let presenter = PresentationCoordinator(
+                outputDir: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("WriteThatDownPreview", isDirectory: true)
+            )
+            self.previewMode = previewMode
+            previewPresenter = presenter
+            switch previewMode {
+            case .chat:
+                presenter.showConversationPreview()
+            case .recordingPrompt:
+                presenter.showRecordingPromptPreview()
+            case .summary:
+                presenter.showConversationSummaryPreview()
+            }
+            return
+        }
 
         do {
             let environment = try AppEnvironment()
@@ -30,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
+        previewMode != nil
     }
 
     /// Re-opening the app (Spotlight, Finder, `open`) while it's already

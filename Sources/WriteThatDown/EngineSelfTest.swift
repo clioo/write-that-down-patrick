@@ -25,10 +25,33 @@ enum EngineSelfTest {
         run(model: model, modelFolder: nil, label: "downloading + loading WhisperKit model '\(model)' (one-time)…")
     }
 
-    private static func run(model: String, modelFolder: URL?, label: String) -> Never {
-        FileHandle.standardError.write(Data("[self-test] \(label)\n".utf8))
+    /// Self-test an installed downloadable catalog model. This exercises both
+    /// the sherpa-onnx model loader and one inference pass without launching UI.
+    static func runSpeechModel(modelID: String) -> Never {
+        guard let manifest = SpeechModelCatalog.model(id: modelID) else {
+            FileHandle.standardError.write(Data("[self-test] unknown speech model '\(modelID)'\n".utf8))
+            exit(2)
+        }
 
-        let engine = WhisperKitEngine()
+        let folder = SpeechModelStore.defaultRootDirectory
+            .appendingPathComponent(manifest.id, isDirectory: true)
+        let engineConfig = EngineConfig(
+            language: "auto",
+            sampleRate: manifest.sampleRate,
+            // Keep partial inference deferred so `stop()` performs exactly one
+            // controlled decode for this diagnostic.
+            windowSeconds: 10,
+            model: manifest.id,
+            modelFolder: folder
+        )
+        execute(
+            engine: SherpaOnnxEngine(),
+            config: engineConfig,
+            label: "loading \(manifest.title) from: \(folder.path)"
+        )
+    }
+
+    private static func run(model: String, modelFolder: URL?, label: String) -> Never {
         let engineConfig = EngineConfig(
             language: "en",
             sampleRate: 16_000,
@@ -36,6 +59,15 @@ enum EngineSelfTest {
             model: model,
             modelFolder: modelFolder
         )
+        execute(engine: WhisperKitEngine(), config: engineConfig, label: label)
+    }
+
+    private static func execute(
+        engine: any TranscriptionEngine,
+        config: EngineConfig,
+        label: String
+    ) -> Never {
+        FileHandle.standardError.write(Data("[self-test] \(label)\n".utf8))
 
         let semaphore = DispatchSemaphore(value: 0)
         let result = ResultBox()
@@ -43,16 +75,20 @@ enum EngineSelfTest {
         Task {
             do {
                 let t0 = Date()
-                try await engine.start(engineConfig)
+                try await engine.start(config)
                 let load = Date().timeIntervalSince(t0)
                 FileHandle.standardError.write(Data(String(format: "[self-test] model ready in %.1fs\n", load).utf8))
 
                 // ~3 s of audible-level noise to exercise the inference path.
-                var samples = [Float](repeating: 0, count: 16_000 * 3)
+                var samples = [Float](repeating: 0, count: Int(config.sampleRate) * 3)
                 for i in samples.indices { samples[i] = Float.random(in: -0.1...0.1) }
-                let segments = try await engine.push(AudioBuffer(samples: samples, sampleRate: 16_000))
-                _ = try await engine.stop()
-                FileHandle.standardError.write(Data("[self-test] inference ran; produced \(segments.count) segment(s)\n".utf8))
+                let partials = try await engine.push(
+                    AudioBuffer(samples: samples, sampleRate: config.sampleRate)
+                )
+                let finals = try await engine.stop()
+                FileHandle.standardError.write(
+                    Data("[self-test] inference ran; produced \(partials.count + finals.count) segment(s)\n".utf8)
+                )
                 result.ok = true
             } catch {
                 FileHandle.standardError.write(Data("[self-test] FAILED: \(error)\n".utf8))
