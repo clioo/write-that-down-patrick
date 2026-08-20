@@ -33,7 +33,7 @@ public final class ConversationWorkspaceModel: ObservableObject {
         public let title: String
         public let detail: String
 
-        public init(id: String, title: String, detail: String = "OpenCode Go") {
+        public init(id: String, title: String, detail: String) {
             self.id = id
             self.title = title
             self.detail = detail
@@ -79,14 +79,24 @@ public final class ConversationWorkspaceModel: ObservableObject {
     /// stored in this model (nor exposed through a published property).
     @Published public var isConfigured = false
     @Published public var configurationError: String?
+    @Published public var assistantProviders: [PiProviderOption] = []
+    @Published public var selectedAssistantProviderID = ""
     @Published public var assistantModels: [AssistantModel] = []
     @Published public var selectedAssistantModelID = ""
     @Published public private(set) var isAnswering = false
+    @Published public var isLoadingProviders = false
+    @Published public var isConnectingProvider = false
+    @Published public var authStatusMessage: String?
+    @Published public var pendingAuthPrompt: PiAuthPrompt?
 
     public init() {}
 
     public var selectedAssistantModel: AssistantModel? {
         assistantModels.first { $0.id == selectedAssistantModelID }
+    }
+
+    public var selectedAssistantProvider: PiProviderOption? {
+        assistantProviders.first { $0.id == selectedAssistantProviderID }
     }
 
     public var conversationTurns: [ConversationAssistantTurn] {
@@ -208,10 +218,41 @@ public final class ConversationWorkspaceModel: ObservableObject {
         }
     }
 
-    public func setAssistantModels(_ models: [OpenCodeGoModelOption], selectedID: String?) {
+    public func setAssistantModels(_ models: [PiAssistantModelOption], selectedID: String?) {
         setAssistantModels(
-            models.map { AssistantModel(id: $0.id, title: $0.title) },
+            models.map { AssistantModel(id: $0.id, title: $0.title, detail: "Pi") },
             selectedID: selectedID
+        )
+    }
+
+    public func setAssistantProviders(
+        _ providers: [PiProviderOption],
+        selectedProviderID: String?,
+        selectedModelID: String?
+    ) {
+        assistantProviders = providers
+        let preferredProvider = selectedProviderID.flatMap { id in providers.first { $0.id == id } }
+            ?? providers.first(where: { $0.isConfigured })
+            ?? providers.first(where: { $0.id == PiConversationAssistant.defaultProviderID })
+            ?? providers.first
+        selectedAssistantProviderID = preferredProvider?.id ?? ""
+        isConfigured = preferredProvider?.isConfigured == true
+        setAssistantModels(
+            (preferredProvider?.models ?? []).map {
+                AssistantModel(id: $0.id, title: $0.title, detail: preferredProvider?.name ?? "Pi")
+            },
+            selectedID: selectedModelID
+        )
+    }
+
+    public func selectAssistantProvider(_ providerID: String, selectedModelID: String? = nil) {
+        guard let provider = assistantProviders.first(where: { $0.id == providerID }) else { return }
+        selectedAssistantProviderID = provider.id
+        isConfigured = provider.isConfigured
+        configurationError = nil
+        setAssistantModels(
+            provider.models.map { AssistantModel(id: $0.id, title: $0.title, detail: provider.name) },
+            selectedID: selectedModelID
         )
     }
 

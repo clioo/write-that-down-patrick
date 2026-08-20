@@ -3,14 +3,18 @@ import XCTest
 @testable import WriteThatDownKit
 
 final class PiOpenCodeGoAssistantTests: XCTestCase {
-    func testAnswerPinsOpenCodeGoAndIsolatesPi() async throws {
+    func testAnswerPinsSelectedProviderAndIsolatesPi() async throws {
         let fixture = try PiFixture()
         defer { fixture.remove() }
-        let parentKeyBefore = ProcessInfo.processInfo.environment["OPENCODE_API_KEY"]
         let secret = "test-key-that-must-not-be-an-argument"
+        let credentials = PiProviderCredentialStore(serviceName: "com.writethatdown.tests.\(UUID().uuidString)")
+        let credentialData = try JSONSerialization.data(withJSONObject: ["type": "api_key", "key": secret])
+        try credentials.saveCredentialData(credentialData, for: "opencode-go")
+        defer { try? credentials.deleteCredential(for: "opencode-go") }
         let assistant = PiOpenCodeGoAssistant(
             piExecutable: fixture.executable,
             runtimeDirectory: fixture.runtimeDirectory,
+            credentialStore: credentials,
             requestTimeout: 10
         )
 
@@ -18,13 +22,12 @@ final class PiOpenCodeGoAssistantTests: XCTestCase {
             transcript: "PRIVATE TRANSCRIPT SENTINEL",
             conversation: [.init(role: .assistant, text: "Earlier answer")],
             question: "QUESTION SENTINEL",
-            modelID: "opencode-go/gpt-5.6-luna",
-            apiKey: "  \(secret)  "
+            providerID: "opencode-go",
+            modelID: "gpt-5.6-luna"
         )
 
         XCTAssertEqual(answer, "Verified response")
-        XCTAssertEqual(try fixture.read("api-key.txt"), secret)
-        XCTAssertEqual(ProcessInfo.processInfo.environment["OPENCODE_API_KEY"], parentKeyBefore)
+        XCTAssertTrue(try fixture.read("auth.txt").contains(secret))
 
         let arguments = try fixture.read("arguments.txt")
         XCTAssertTrue(arguments.contains("<--provider>\n<opencode-go>"))
@@ -57,35 +60,30 @@ final class PiOpenCodeGoAssistantTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sessionDirectory))
     }
 
-    func testAvailableModelsReturnsOnlyOpenCodeGoRows() async throws {
-        let fixture = try PiFixture()
-        defer { fixture.remove() }
-        let assistant = PiOpenCodeGoAssistant(
-            piExecutable: fixture.executable,
-            runtimeDirectory: fixture.runtimeDirectory,
-            requestTimeout: 10
-        )
-
-        let models = try await assistant.availableModels(apiKey: "secret")
-
+    func testModelListParserFiltersSelectedProviderAndDeduplicates() {
+        let output = """
+        provider     model
+        opencode-go  gpt-5.6-luna
+        openai       gpt-from-another-provider
+        opencode-go  glm-5.3
+        opencode-go  gpt-5.6-luna
+        """
+        let models = PiOpenCodeGoAssistant.parseModelList(output, provider: "opencode-go")
         XCTAssertEqual(models, [
             .init(id: "gpt-5.6-luna", title: "GPT-5.6 Luna"),
             .init(id: "glm-5.3", title: "Glm 5.3"),
         ])
-        let arguments = try fixture.read("arguments.txt")
-        XCTAssertTrue(arguments.contains("<--list-models>\n<opencode-go>"))
         XCTAssertFalse(models.contains { $0.id == "gpt-from-another-provider" })
     }
 
-    func testModelValidationCannotChangeProviderOrInjectAnOption() throws {
-        XCTAssertEqual(
-            try PiOpenCodeGoAssistant.validatedModelID("opencode-go/gpt-5.6-luna"),
-            "gpt-5.6-luna"
-        )
-        XCTAssertThrowsError(try PiOpenCodeGoAssistant.validatedModelID("openai/gpt-5.6"))
+    func testProviderAndModelValidationRejectOptionInjection() throws {
+        XCTAssertEqual(try PiOpenCodeGoAssistant.validatedModelID("openai/gpt-5.6"), "openai/gpt-5.6")
+        XCTAssertEqual(try PiOpenCodeGoAssistant.validatedProviderID("openai-codex"), "openai-codex")
         XCTAssertThrowsError(try PiOpenCodeGoAssistant.validatedModelID("--provider"))
-        XCTAssertThrowsError(try PiOpenCodeGoAssistant.validatedModelID("../model"))
         XCTAssertThrowsError(try PiOpenCodeGoAssistant.validatedModelID("model\n--tools"))
+        XCTAssertThrowsError(try PiOpenCodeGoAssistant.validatedModelID("model --tools"))
+        XCTAssertThrowsError(try PiOpenCodeGoAssistant.validatedProviderID("--provider"))
+        XCTAssertThrowsError(try PiOpenCodeGoAssistant.validatedProviderID("openai/codex"))
     }
 
     func testQuestionPromptUsesOnlyRecentHistory() {
@@ -164,9 +162,9 @@ private final class PiFixture {
     private static let script = #"""
     #!/bin/sh
     printf '<%s>\n' "$@" > "$PWD/arguments.txt"
-    printf '%s' "${OPENCODE_API_KEY-}" > "$PWD/api-key.txt"
     printf '%s' "${PI_CODING_AGENT_DIR-}" > "$PWD/pi-dir.txt"
     printf '%s' "${PI_CODING_AGENT_SESSION_DIR-}" > "$PWD/session-dir.txt"
+    cp "${PI_CODING_AGENT_DIR}/auth.json" "$PWD/auth.txt"
     cat > "$PWD/stdin.txt"
 
     case " $* " in

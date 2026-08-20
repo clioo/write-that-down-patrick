@@ -8,7 +8,7 @@
 
 <p align="center">
   A local-first macOS meeting copilot that transcribes on your Mac, answers
-  questions while people are still talking when OpenCode Go is connected, and
+  questions while people are still talking through your chosen Pi provider, and
   turns the finished conversation into durable Markdown notes.
 </p>
 
@@ -18,7 +18,7 @@
   · <a href="#privacy-without-hand-waving">Understand the privacy boundary</a>
 </p>
 
-<p align="center"><code>macOS 13+</code> · <code>Local transcription</code> · <code>Plain Markdown</code> · <code>OpenCode Go only for AI</code></p>
+<p align="center"><code>macOS 13+</code> · <code>Local transcription</code> · <code>Plain Markdown</code> · <code>Pi provider catalog</code></p>
 
 ## Stay in the conversation
 
@@ -40,23 +40,36 @@ microphone episode ends.
 
 ### 2. Ask the conversation while it is happening
 
-Connect OpenCode Go, choose one of its available models, and ask about decisions,
+Connect OpenAI with ChatGPT, OpenCode Go with an API key, or any other provider
+and sign-in method exposed by your installed Pi version. Then ask about decisions,
 owners, dates, or unresolved questions. The assistant uses the transcript
 available at that moment—there is no Codex task to open and no Markdown path to
 copy.
 
-![The live transcript and OpenCode Go conversation chat shown side by side](docs/screenshots/conversation-chat.png)
+![The live transcript and AI conversation chat shown side by side](docs/screenshots/conversation-chat.png)
 
-### 3. Reopen any conversation and keep asking
+### 3. Bring the providers and speech models you already use
+
+The settings window reads Pi's installed provider catalog, including each
+provider's models and supported connection methods. Sign in with a subscription,
+paste an API key, or follow a device-code flow when Pi exposes it—without putting
+credentials in a transcript or configuration file. The Transcription tab restores
+the choice of local engine and downloaded model for the next conversation.
+
+| AI providers from Pi | Local transcription engines |
+| --- | --- |
+| ![OpenAI Codex selected in the Pi provider settings, with ChatGPT subscription sign-in available](docs/screenshots/provider-settings.png) | ![The transcription settings showing Parakeet, WhisperKit, and Apple Speech options](docs/screenshots/transcription-settings.png) |
+
+### 4. Reopen any conversation and keep asking
 
 Open the full app from the menu-bar widget at any time. The conversation
 sidebar indexes your saved Markdown transcripts, so you can move between past
 meetings, reread what happened, ask a new question, or generate a missing
 summary without finding and copying a file path.
 
-### 4. Finish with the important parts already organized
+### 5. Finish with the important parts already organized
 
-When recording ends, the transcript is finalized first. If OpenCode Go is
+When recording ends, the transcript is finalized first. If an AI provider is
 configured, Write That Down then generates a summary centered on supported
 decisions, next steps, and open questions. An assistant failure never prevents
 the underlying transcript from being saved.
@@ -72,7 +85,7 @@ the underlying transcript from being saved.
   built-in history.
 - **An app you can reopen anytime.** Choose **Open Write That Down** in the
   menu-bar widget even when no meeting is being recorded.
-- **A useful finish.** The completed transcript is saved first; an OpenCode Go
+- **A useful finish.** The completed transcript is saved first; an optional AI
   summary is generated afterward when the assistant is configured.
 - **English or Spanish UI.** Write That Down follows the primary macOS language
   when it is English or Spanish and falls back to English for every other language.
@@ -81,6 +94,8 @@ the underlying transcript from being saved.
 - **Captions built for reading.** Scroll back without being yanked to the bottom,
   jump back to live, resize the panel, change text size, or hide captions without
   stopping the recording.
+- **One settings home.** Configure Pi providers and switch transcription engines
+  from the gear button in the main window.
 - **Speech-model choice.** Use WhisperKit, download the Parakeet TDT v3 ONNX
   model, or opt into Apple's on-device speech recognizer.
 
@@ -111,29 +126,30 @@ boundary is:
 
 | Data | What happens |
 | --- | --- |
-| Captured microphone and system audio | Stays on the Mac and is never sent to OpenCode Go |
+| Captured microphone and system audio | Stays on the Mac and is never sent to an AI provider |
 | Speech recognition | Runs locally with the selected transcription engine |
 | Markdown transcript | Is stored locally in the configured output directory |
-| A live assistant question | Sends the current final transcript text, the question, and bounded in-session chat context to the selected OpenCode Go model |
-| End-of-meeting summary | Sends the completed final transcript text to the selected OpenCode Go model, then stores the returned summary locally |
-| OpenCode Go API key | Is stored in the macOS Keychain and passed only as a transient credential to the one-shot Pi process |
+| A live assistant question | Sends the current final transcript text, the question, and bounded in-session chat context to the selected provider and model |
+| End-of-meeting summary | Sends the completed final transcript text to the selected provider and model, then stores the returned summary locally |
+| API keys and OAuth tokens | Stay in the macOS Keychain and are materialized only in a permission-restricted, short-lived Pi credential file |
 
-Assistant traffic happens only after OpenCode Go has been configured. Provider
-processing and retention depend on the selected OpenCode Go model's published
+Assistant traffic happens only after a provider has been connected. Processing
+and retention depend on the selected provider and model's published
 policy. Speech-model downloads also require network access when a model is not
 already installed, but captured audio is never uploaded for transcription.
 
-### OpenCode Go only, through a minimal Pi boundary
+### Pi providers through a minimal boundary
 
 The meeting assistant is intentionally not a general coding agent:
 
-- Every model request pins the provider to `opencode-go`.
+- Every model request pins the exact provider and model selected in the UI.
+- Provider names, models, API-key forms, OAuth flows, and device-code steps come
+  from the installed Pi runtime rather than a hardcoded app catalog.
 - Pi runs once per request with no session, tools, extensions, skills, prompt
   templates, context files, or access to the user's normal Pi configuration.
 - The transcript is sent over standard input; Pi is never asked to discover or
   read the Markdown file.
-- The assistant has no fallback to Codex, a direct OpenAI API key, or another
-  provider.
+- The assistant never falls back to a different provider or account.
 - Missing Pi or missing assistant credentials never disables recording, local
   transcription, captions, or transcript persistence.
 
@@ -145,7 +161,7 @@ The meeting assistant is intentionally not a general coding agent:
 - Swift 6 / Xcode 16 or newer
 - Swift Package Manager
 - Pi Coding Agent only if you want chat and summaries
-- An OpenCode Go API key only if you want chat and summaries
+- Credentials for at least one Pi provider only if you want chat and summaries
 
 ### Build and install
 
@@ -192,8 +208,12 @@ Write That Down looks for Pi in `~/.local/bin`, `/opt/homebrew/bin`, and
 WTD_PI_PATH=/absolute/path/to/pi swift run WriteThatDown
 ```
 
-In the conversation window, open the OpenCode Go setup, paste the API key, and
-save it. The key is stored in the login Keychain rather than `config.json` or the
+In the conversation window, click the gear, open **AI Providers**, and choose a
+provider. The app shows exactly the connection methods Pi exposes. For example,
+OpenAI Codex offers browser-based ChatGPT subscription sign-in, while OpenCode Go
+offers an API-key form. OpenAI documents both ChatGPT and API-key authentication
+for its local Codex clients in its [authentication guide](https://developers.openai.com/codex/auth).
+Credentials are stored in the login Keychain rather than `config.json` or the
 transcript directory.
 
 Write That Down is an accessory app: it has no Dock icon and remains available
@@ -225,7 +245,7 @@ and begin a new episode after granting access.
    source, approve the compact prompt only when you want a transcript.
 3. Follow the live transcript in the conversation window or floating caption
    panel.
-4. If OpenCode Go is connected, ask questions in the Chat tab during the
+4. If an AI provider is connected, ask questions in the Chat tab during the
    conversation.
 5. Stop manually, or let microphone release / sustained inactivity finalize the
    session.
@@ -372,7 +392,7 @@ helper can inspect recent events and crash reports:
   session even though partial captions update live.
 - Browser-hosted meetings auto-start only when a visible Google Meet window can
   be identified. Other browser microphone use asks first.
-- Chat and summaries require both Pi Coding Agent and an OpenCode Go API key.
+- Chat and summaries require Pi Coding Agent plus a connected provider account.
 
 ## Technical reference
 

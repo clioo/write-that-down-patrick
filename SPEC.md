@@ -1,10 +1,10 @@
 # Write That Down Specification
 
-Status: Draft v2 (source-aware detection and conversation assistant)
+Status: Draft v3 (source-aware detection and Pi provider settings)
 
 Purpose: Define a macOS application that detects likely meetings, transcribes
 their audio in real time and locally, displays a live conversation workspace,
-supports questions over the conversation through OpenCode Go, produces an
+supports questions over the conversation through a user-selected Pi provider, produces an
 end-of-conversation summary, and organizes transcripts on the filesystem.
 
 ## Normative Language
@@ -31,7 +31,7 @@ Important boundary:
 
 - Audio capture and speech transcription remain local.
 - Only transcript text and assistant conversation text cross the device boundary,
-  and only through the `opencode-go` provider.
+  and only through the provider and model explicitly selected by the user.
 - The Pi runtime invoked by the application is a minimal model-protocol adapter. It has no coding,
   shell, or filesystem tools and never receives a transcript path.
 - Transcript persistence is independent from assistant availability. An
@@ -49,8 +49,8 @@ Important boundary:
 - Display a live transcript and conversation workspace during the call.
 - Present the interface in English or Spanish according to the primary macOS
   language, with English as the fallback for unsupported languages.
-- Support in-session Q&A and generate a summary after finalization using
-  OpenCode Go models.
+- Support in-session Q&A and generate a summary after finalization using models
+  exposed by the installed Pi provider catalog.
 - Expose operational status to the user (menu bar and notifications).
 - Persist transcripts in Markdown organized by date.
 - Stop recording automatically after sustained audio inactivity.
@@ -58,7 +58,7 @@ Important boundary:
 
 ### 2.2 Non-Goals
 
-- Supporting AI providers other than `opencode-go` in v2.
+- Implementing provider protocols or authentication flows not exposed by Pi.
 - Giving the assistant shell, filesystem, code-editing, or autonomous agent tools.
 - Uploading captured audio to any AI provider.
 - Search or correlation across multiple transcripts.
@@ -120,13 +120,14 @@ Important boundary:
 
   - Accepts the current transcript text and in-session questions.
   - Uses a minimal, request-scoped Pi runtime with no tools.
-  - Routes every model request exclusively through `opencode-go`.
+  - Routes every model request through the provider and model selected in the UI.
   - Generates the final summary after transcript finalization.
 
 10. `Credential Store`
 
-  - Stores and retrieves the OpenCode Go API key from the macOS Keychain.
-  - Never exposes the key in transcript files, application configuration,
+  - Stores and retrieves Pi-compatible API-key and OAuth credentials from the
+    macOS Keychain.
+  - Never exposes credentials in transcript files, application configuration,
     process arguments, or logs.
 
 11. `Conversation Library`
@@ -167,7 +168,7 @@ The service is easiest to port and maintain when kept in these layers:
 7. `Assistant Layer`
 
   - Request-scoped transcript context, chat history, summary generation, and the
-    OpenCode Go provider boundary.
+    selected Pi provider boundary.
 
 ### 3.3 External Dependencies
 
@@ -177,10 +178,10 @@ The service is easiest to port and maintain when kept in these layers:
 - Local filesystem for transcripts.
 - Operating system notification system.
 - Operating system permissions for microphone and audio capture.
-- macOS Keychain for the OpenCode Go API key.
-- OpenCode Go network access for chat and summary requests.
+- macOS Keychain for provider API keys and OAuth tokens.
+- Selected provider network access for chat and summary requests.
 - A minimal Pi model runtime supporting the protocol used by the selected
-  OpenCode Go model.
+  provider model.
 
 ## 4. Core Domain Model
 
@@ -277,10 +278,10 @@ Ephemeral AI state scoped to one recording session.
 Fields:
 
 - `session_id` (string)
-- `provider` (constant string)
-  * MUST equal `opencode-go`.
+- `provider` (string)
+  * MUST identify the provider explicitly selected from the installed Pi catalog.
 - `model_id` (string)
-  * MUST identify a model exposed by OpenCode Go.
+  * MUST identify a model exposed by that provider.
 - `messages` (list)
   * User questions and assistant answers for this session only.
 - `summary` (string or null)
@@ -570,16 +571,16 @@ operation starts.
 Implementations MUST document any additional implementation-defined values (for
 example, audio level threshold or buffer size).
 
-The selected OpenCode Go model MAY be stored as an application preference. The
-OpenCode Go API key MUST NOT be represented by this configuration layer or
-accepted from its JSON file; it belongs exclusively in the credential store.
+The selected provider and model MAY be stored as application preferences.
+Provider credentials MUST NOT be represented by this configuration layer or
+accepted from its JSON file; they belong exclusively in the credential store.
 
 ## 12. Privacy and Safety
 
 - Audio MUST be processed locally and MUST NOT be sent to the conversation
   assistant or any other remote service.
 - The service MAY send transcript text, the user's questions, and bounded
-  in-session assistant context to OpenCode Go only as specified in §13.
+  in-session assistant context to the selected provider only as specified in §13.
 - When the configured assistant generates the end-of-conversation summary, the
   service MUST send the finalized transcript text, not captured audio.
 - The UI MUST make the local-audio/remote-text boundary clear before the first
@@ -588,17 +589,18 @@ accepted from its JSON file; it belongs exclusively in the credential store.
   and operate only after they are granted.
 - Transcripts are stored as plain text in `output_dir`; the implementation SHOULD
   document this location so the user can control its confidentiality.
-- Provider-side handling and retention MAY vary by OpenCode Go model; the model
+- Provider-side handling and retention MAY vary by provider and model; the model
   selection UI SHOULD expose or link to the applicable policy when available.
 
 ## 13. Integrated Conversation Assistant
 
 ### 13.1 Provider and Runtime Boundary
 
-- Every assistant request MUST use the provider identifier `opencode-go`.
-- Models MUST be selected from the catalog exposed by OpenCode Go. The
-  implementation MUST NOT silently route through Codex, a direct OpenAI API, or
-  another provider.
+- Every assistant request MUST use the exact provider identifier and model
+  selected by the user.
+- Providers, models, and supported authentication methods MUST be sourced from
+  the installed Pi runtime. The implementation MUST NOT silently route through
+  a different provider, model, or account.
 - The application MUST use Pi only as a minimal, request-scoped model runtime.
 - The Pi runtime MUST expose no shell, filesystem, code-editing, web, or other
   agent tools.
@@ -607,13 +609,17 @@ accepted from its JSON file; it belongs exclusively in the credential store.
 
 ### 13.2 Credentials
 
-- The OpenCode Go API key MUST be stored in the macOS Keychain.
-- The key MUST NOT be written to `config.json`, transcripts, logs, analytics, or
-  process arguments. It MAY be injected into the isolated Pi child process as a
-  transient provider environment value and MUST NOT outlive that one-shot
-  request.
-- If the key is missing, recording and local transcription MUST remain available;
-  the assistant UI MUST explain how to configure it.
+- API keys, OAuth access tokens, and OAuth refresh tokens MUST be stored in the
+  macOS Keychain.
+- Credentials MUST NOT be written to `config.json`, transcripts, logs,
+  analytics, or process arguments. They MAY be materialized in an isolated,
+  permission-restricted Pi credential file and MUST be deleted after the
+  catalog, authentication, or one-shot request operation finishes.
+- The settings UI MUST expose every interactive authentication method declared
+  by the installed Pi runtime, including multi-step prompts, OAuth browser
+  flows, and device-code flows.
+- If credentials are missing, recording and local transcription MUST remain
+  available; the assistant UI MUST explain how to connect a provider.
 
 ### 13.3 Live Conversation Q&A
 
@@ -635,7 +641,7 @@ accepted from its JSON file; it belongs exclusively in the credential store.
 ### 13.4 End-of-Conversation Summary
 
 - After the transcript is finalized, a configured assistant MUST automatically
-  request a summary from the selected OpenCode Go model.
+  request a summary from the selected provider and model.
 - The summary SHOULD prioritize decisions, action items, owners, dates, unresolved
   questions, and the most important context actually present in the transcript.
 - The generated summary MUST be presented in the conversation workspace's
@@ -739,7 +745,7 @@ function finalize_session(state, reason):
   state.current_session.ended_at = now_local()
   state.current_session.end_reason = reason
   state.session_status = Saved
-  request_summary_async(final_transcript_text)  # opencode-go; cannot change Saved
+  request_summary_async(final_transcript_text)  # selected provider; cannot change Saved
   set_status(Idle)
   state.current_session = null
   return state
@@ -818,13 +824,13 @@ Validation profiles:
 
 ### 15.8 Conversation Assistant
 
-- Every model request resolves to provider `opencode-go`; unsupported providers
-  are rejected rather than used as fallbacks.
+- Every model request resolves to the provider and model selected from Pi's
+  catalog; unknown values are rejected rather than used as fallbacks.
 - The Pi runtime is launched without tools and receives transcript text, not a
   filesystem path.
-- The API key round-trips through Keychain storage and is absent from logs,
-  application configuration, transcript files, and process arguments; any Pi
-  child-process environment value is request-scoped.
+- API-key and OAuth credentials round-trip through Keychain storage and are
+  absent from logs, application configuration, transcript files, and process
+  arguments; any temporary Pi credential file is request-scoped.
 - A live question includes the latest available transcript text and session-only
   chat context.
 - Summary generation begins only after transcript finalization.
@@ -844,7 +850,7 @@ Validation profiles:
 - Swappable transcription engine with the contract of §8.
 - Default transcription engine that is portable and open source.
 - Live captions (partial and final segments).
-- Live conversation workspace with transcript, OpenCode Go chat, and final
+- Live conversation workspace with transcript, Pi-provider chat, and final
   summary.
 - Conversation library navigation for finalized transcripts, with Q&A and
   summary generation scoped to the selected conversation.
@@ -858,8 +864,9 @@ Validation profiles:
 - Incremental persistence of final segments.
 - Failure handling per §10 without silent loss.
 - Typed configuration layer with defaults and pre-operation validation.
-- Minimal tool-free Pi runtime restricted to `opencode-go` models.
-- OpenCode Go API-key storage in macOS Keychain.
+- Minimal tool-free Pi runtime pinned to the selected provider and model.
+- Pi provider catalog and interactive authentication methods in the settings UI.
+- Provider API-key and OAuth credential storage in macOS Keychain.
 - Assistant failures isolated from recording and persistence correctness.
 
 ### 16.2 RECOMMENDED Extensions (Not REQUIRED for Conformance)
@@ -890,7 +897,7 @@ floating caption surface remains independently hideable.
 - It MUST keep transcript and assistant panes usable at the same time during an
   active conversation.
 - It MUST expose distinct Chat and Summary views and identify the selected model
-  as an OpenCode Go model.
+  with its provider and model name.
 
 ## Appendix B. External Transcript Use
 

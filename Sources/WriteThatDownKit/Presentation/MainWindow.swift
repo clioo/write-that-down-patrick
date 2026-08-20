@@ -26,11 +26,16 @@ public final class MainWindowController {
     var onDeleteEngineOption: (String) -> Void = { _ in }
     var onQuit: () -> Void = {}
 
-    // Conversation-assistant actions. The API key is handed directly to the
-    // app layer and is never retained by a presentation model.
+    // Conversation-assistant actions. Credentials are collected by the Pi
+    // bridge and are never retained by a presentation model.
     var onAsk: (String) -> Void = { _ in }
+    var onSelectAssistantProvider: (String) -> Void = { _ in }
     var onSelectAssistantModel: (String) -> Void = { _ in }
-    var onSaveAssistantAPIKey: (String) -> Void = { _ in }
+    var onConnectAssistantProvider: (String, PiProviderAuthMethod.Kind) -> Void = { _, _ in }
+    var onDisconnectAssistantProvider: (String) -> Void = { _ in }
+    var onSubmitAuthPrompt: (String) -> Void = { _ in }
+    var onCancelAuth: () -> Void = {}
+    var onRefreshAssistantProviders: () -> Void = {}
     var onSelectConversation: (String?) -> Void = { _ in }
     var onRefreshConversations: () -> Void = {}
     var onGenerateSelectedSummary: () -> Void = {}
@@ -70,9 +75,17 @@ public final class MainWindowController {
                 conversationLibrary: conversationLibrary,
                 onStop: { [weak self] in self?.onStop() },
                 onOpenFolder: { [weak self] in self?.onOpenFolder() },
+                onSelectEngineOption: { [weak self] id in self?.onSelectEngineOption(id) },
+                onDownloadEngineOption: { [weak self] id in self?.onDownloadEngineOption(id) },
+                onDeleteEngineOption: { [weak self] id in self?.onDeleteEngineOption(id) },
                 onAsk: { [weak self] question in self?.onAsk(question) },
+                onSelectAssistantProvider: { [weak self] id in self?.onSelectAssistantProvider(id) },
                 onSelectAssistantModel: { [weak self] id in self?.onSelectAssistantModel(id) },
-                onSaveAssistantAPIKey: { [weak self] key in self?.onSaveAssistantAPIKey(key) },
+                onConnectAssistantProvider: { [weak self] provider, type in self?.onConnectAssistantProvider(provider, type) },
+                onDisconnectAssistantProvider: { [weak self] provider in self?.onDisconnectAssistantProvider(provider) },
+                onSubmitAuthPrompt: { [weak self] value in self?.onSubmitAuthPrompt(value) },
+                onCancelAuth: { [weak self] in self?.onCancelAuth() },
+                onRefreshAssistantProviders: { [weak self] in self?.onRefreshAssistantProviders() },
                 onSelectConversation: { [weak self] id in self?.onSelectConversation(id) },
                 onRefreshConversations: { [weak self] in self?.onRefreshConversations() },
                 onGenerateSelectedSummary: { [weak self] in self?.onGenerateSelectedSummary() },
@@ -116,9 +129,17 @@ private struct MainWindowView: View {
     @ObservedObject var conversationLibrary: ConversationLibraryModel
     var onStop: () -> Void
     var onOpenFolder: () -> Void
+    var onSelectEngineOption: (String) -> Void
+    var onDownloadEngineOption: (String) -> Void
+    var onDeleteEngineOption: (String) -> Void
     var onAsk: (String) -> Void
+    var onSelectAssistantProvider: (String) -> Void
     var onSelectAssistantModel: (String) -> Void
-    var onSaveAssistantAPIKey: (String) -> Void
+    var onConnectAssistantProvider: (String, PiProviderAuthMethod.Kind) -> Void
+    var onDisconnectAssistantProvider: (String) -> Void
+    var onSubmitAuthPrompt: (String) -> Void
+    var onCancelAuth: () -> Void
+    var onRefreshAssistantProviders: () -> Void
     var onSelectConversation: (String?) -> Void
     var onRefreshConversations: () -> Void
     var onGenerateSelectedSummary: () -> Void
@@ -126,7 +147,7 @@ private struct MainWindowView: View {
 
     @State private var transcriptCopied = false
     @State private var copyResetTask: Task<Void, Never>?
-    @State private var apiKeySheetShown = false
+    @State private var settingsSheetShown = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -159,7 +180,7 @@ private struct MainWindowView: View {
                         selectedWorkspace.selectedAssistantModelID = id
                         onSelectAssistantModel(id)
                     },
-                    onConfigure: { apiKeySheetShown = true },
+                    onConfigure: { settingsSheetShown = true },
                     canGenerateSummary: conversationLibrary.selectedConversation != nil,
                     onGenerateSummary: onGenerateSelectedSummary
                 )
@@ -170,10 +191,19 @@ private struct MainWindowView: View {
             privacyFooter
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .sheet(isPresented: $apiKeySheetShown) {
-            AssistantAPIKeySheet(
-                errorMessage: selectedWorkspace.configurationError,
-                onSave: onSaveAssistantAPIKey
+        .sheet(isPresented: $settingsSheetShown) {
+            ApplicationSettingsSheet(
+                workspace: selectedWorkspace,
+                statusModel: statusModel,
+                onSelectProvider: onSelectAssistantProvider,
+                onConnectProvider: onConnectAssistantProvider,
+                onDisconnectProvider: onDisconnectAssistantProvider,
+                onSubmitAuthPrompt: onSubmitAuthPrompt,
+                onCancelAuth: onCancelAuth,
+                onRefreshProviders: onRefreshAssistantProviders,
+                onSelectEngine: onSelectEngineOption,
+                onDownloadEngine: onDownloadEngineOption,
+                onDeleteEngine: onDeleteEngineOption
             )
         }
         .onDisappear {
@@ -217,6 +247,16 @@ private struct MainWindowView: View {
             }
 
             Spacer(minLength: 24)
+
+            Button {
+                settingsSheetShown = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .help(conversationLanguage.text("Settings", spanish: "Configuración"))
 
             Button(action: copyTranscript) {
                 Label(
@@ -321,7 +361,10 @@ private struct MainWindowView: View {
                 .foregroundStyle(.secondary)
             Text("·")
                 .foregroundStyle(.tertiary)
-            Text(conversationLanguage.text("AI context is sent to OpenCode Go", spanish: "El contexto de IA se envía a OpenCode Go"))
+            Text(conversationLanguage.text(
+                "AI context is sent to the selected provider",
+                spanish: "El contexto de IA se envía al proveedor seleccionado"
+            ))
                 .foregroundStyle(.secondary)
         }
         .font(.system(size: 12))
@@ -708,7 +751,7 @@ private struct ConversationAssistantPane: View {
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
-                .help(conversationLanguage.text("Configure OpenCode Go", spanish: "Configurar OpenCode Go"))
+                .help(conversationLanguage.text("Configure AI providers", spanish: "Configurar proveedores de IA"))
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
@@ -717,7 +760,7 @@ private struct ConversationAssistantPane: View {
             .overlay { Capsule().stroke(Color.secondary.opacity(0.18)) }
         } else {
             Button(action: onConfigure) {
-                Label(conversationLanguage.text("Connect OpenCode Go", spanish: "Conectar OpenCode Go"), systemImage: "sparkles")
+                Label(conversationLanguage.text("Connect a provider", spanish: "Conectar un proveedor"), systemImage: "sparkles")
                     .lineLimit(1)
             }
             .buttonStyle(.bordered)
@@ -727,9 +770,9 @@ private struct ConversationAssistantPane: View {
 
     private var providerLabel: String {
         if let option = model.selectedAssistantModel {
-            return "OpenCode Go · \(option.title)"
+            return "\(model.selectedAssistantProvider?.name ?? "Pi") · \(option.title)"
         }
-        return "OpenCode Go"
+        return model.selectedAssistantProvider?.name ?? "Pi"
     }
 
     private func tabButton(_ tab: ConversationWorkspaceModel.Tab, title: String) -> some View {
@@ -764,10 +807,10 @@ private struct ConversationChatView: View {
         VStack(spacing: 0) {
             if !model.isConfigured {
                 AssistantConfigurationEmptyState(
-                    title: conversationLanguage.text("Connect OpenCode Go to chat", spanish: "Conecta OpenCode Go para chatear"),
+                    title: conversationLanguage.text("Connect an AI provider to chat", spanish: "Conecta un proveedor de IA para chatear"),
                     detail: conversationLanguage.text(
-                        "Your questions use only the provider and model you select in OpenCode Go.",
-                        spanish: "Tus preguntas usan únicamente el proveedor y modelo que elijas en OpenCode Go."
+                        "Provider connections and models come directly from your installed Pi catalog.",
+                        spanish: "Las conexiones y modelos vienen directamente del catálogo de Pi instalado."
                     ),
                     action: onConfigure
                 )
@@ -933,7 +976,7 @@ private struct ConversationSummaryView: View {
         Group {
             if !model.isConfigured {
                 AssistantConfigurationEmptyState(
-                    title: conversationLanguage.text("Connect OpenCode Go to generate a summary", spanish: "Conecta OpenCode Go para generar el resumen"),
+                    title: conversationLanguage.text("Connect an AI provider to generate a summary", spanish: "Conecta un proveedor de IA para generar el resumen"),
                     detail: conversationLanguage.text("The summary will be created when the conversation ends.", spanish: "El resumen se creará al terminar la conversación."),
                     action: onConfigure
                 )
@@ -957,8 +1000,8 @@ private struct ConversationSummaryView: View {
                     : conversationLanguage.text("Available when finished", spanish: "Disponible al terminar"))
                     .font(.system(size: 15, weight: .semibold))
                 Text(conversationLanguage.text(
-                    "OpenCode Go will summarize key points, decisions, and next steps.",
-                    spanish: "OpenCode Go resumirá los puntos importantes, decisiones y próximos pasos."
+                    "\(model.selectedAssistantProvider?.name ?? "The selected provider") will summarize key points, decisions, and next steps.",
+                    spanish: "\(model.selectedAssistantProvider?.name ?? "El proveedor seleccionado") resumirá los puntos importantes, decisiones y próximos pasos."
                 ))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -1038,7 +1081,7 @@ private struct AssistantConfigurationEmptyState: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 340)
-            Button(conversationLanguage.text("Configure OpenCode Go", spanish: "Configurar OpenCode Go"), action: action)
+            Button(conversationLanguage.text("Configure providers", spanish: "Configurar proveedores"), action: action)
                 .buttonStyle(.borderedProminent)
                 .tint(ConversationPalette.accent)
         }
@@ -1046,72 +1089,331 @@ private struct AssistantConfigurationEmptyState: View {
     }
 }
 
-// MARK: - API-key sheet
+// MARK: - Settings
 
-private struct AssistantAPIKeySheet: View {
+private struct ApplicationSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var apiKey = ""
-    @FocusState private var keyFieldFocused: Bool
-
-    let errorMessage: String?
-    let onSave: (String) -> Void
+    @ObservedObject var workspace: ConversationWorkspaceModel
+    @ObservedObject var statusModel: StatusModel
+    let onSelectProvider: (String) -> Void
+    let onConnectProvider: (String, PiProviderAuthMethod.Kind) -> Void
+    let onDisconnectProvider: (String) -> Void
+    let onSubmitAuthPrompt: (String) -> Void
+    let onCancelAuth: () -> Void
+    let onRefreshProviders: () -> Void
+    let onSelectEngine: (String) -> Void
+    let onDownloadEngine: (String) -> Void
+    let onDeleteEngine: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 20))
-                    .foregroundStyle(ConversationPalette.accent)
-                Text(conversationLanguage.text("Connect OpenCode Go", spanish: "Conectar OpenCode Go"))
+        VStack(spacing: 0) {
+            HStack {
+                Text(conversationLanguage.text("Settings", spanish: "Configuración"))
                     .font(.title2.weight(.semibold))
+                Spacer()
+                Button(conversationLanguage.text("Done", spanish: "Listo")) { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+            Divider()
+
+            TabView {
+                ProviderSettingsView(
+                    workspace: workspace,
+                    onSelectProvider: onSelectProvider,
+                    onConnectProvider: onConnectProvider,
+                    onDisconnectProvider: onDisconnectProvider,
+                    onSubmitAuthPrompt: onSubmitAuthPrompt,
+                    onCancelAuth: onCancelAuth,
+                    onRefreshProviders: onRefreshProviders
+                )
+                .tabItem {
+                    Label(conversationLanguage.text("AI Providers", spanish: "Proveedores de IA"), systemImage: "sparkles")
+                }
+
+                TranscriptionSettingsView(
+                    model: statusModel,
+                    onSelect: onSelectEngine,
+                    onDownload: onDownloadEngine,
+                    onDelete: onDeleteEngine
+                )
+                .tabItem {
+                    Label(conversationLanguage.text("Transcription", spanish: "Transcripción"), systemImage: "waveform")
+                }
+            }
+            .padding(16)
+        }
+        .frame(width: 820, height: 620)
+        .onDisappear { if workspace.isConnectingProvider { onCancelAuth() } }
+    }
+}
+
+private struct ProviderSettingsView: View {
+    @ObservedObject var workspace: ConversationWorkspaceModel
+    let onSelectProvider: (String) -> Void
+    let onConnectProvider: (String, PiProviderAuthMethod.Kind) -> Void
+    let onDisconnectProvider: (String) -> Void
+    let onSubmitAuthPrompt: (String) -> Void
+    let onCancelAuth: () -> Void
+    let onRefreshProviders: () -> Void
+    @State private var search = ""
+    @State private var promptValue = ""
+
+    private var filteredProviders: [PiProviderOption] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return workspace.assistantProviders }
+        return workspace.assistantProviders.filter {
+            $0.name.localizedCaseInsensitiveContains(query) || $0.id.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(spacing: 10) {
+                TextField(conversationLanguage.text("Search providers", spanish: "Buscar proveedores"), text: $search)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 10)
+                List(filteredProviders, selection: Binding(
+                    get: { workspace.selectedAssistantProviderID },
+                    set: { id in if !id.isEmpty { onSelectProvider(id) } }
+                )) { provider in
+                    HStack(spacing: 8) {
+                        Image(systemName: provider.isConfigured ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(provider.isConfigured ? .green : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(provider.name).lineLimit(1)
+                            Text("\(provider.models.count) \(conversationLanguage.text("models", spanish: "modelos"))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .tag(provider.id)
+                }
+                .listStyle(.sidebar)
+            }
+            .frame(width: 260)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if workspace.isLoadingProviders {
+                        ProgressView(conversationLanguage.text("Reading Pi's provider catalog…", spanish: "Leyendo el catálogo de proveedores de Pi…"))
+                            .frame(maxWidth: .infinity, minHeight: 300)
+                    } else if let provider = workspace.selectedAssistantProvider {
+                        providerDetail(provider)
+                    } else {
+                        Text(workspace.configurationError ?? conversationLanguage.text(
+                            "No providers were found. Make sure Pi is installed.",
+                            spanish: "No se encontraron proveedores. Asegúrate de que Pi esté instalado."
+                        ))
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            Button(action: onRefreshProviders) { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.borderless)
+                .padding(12)
+                .help(conversationLanguage.text("Refresh Pi catalog", spanish: "Actualizar catálogo de Pi"))
+        }
+    }
+
+    @ViewBuilder
+    private func providerDetail(_ provider: PiProviderOption) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(provider.name).font(.title2.weight(.semibold))
+                    Text(provider.id).font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if provider.isConfigured {
+                    Label(conversationLanguage.text("Connected", spanish: "Conectado"), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
             }
 
             Text(conversationLanguage.text(
-                "Add your API key to ask questions and generate summaries. Write That Down stores it in this Mac's Keychain and passes it only to the isolated Pi process.",
-                spanish: "Añade tu API key para hacer preguntas y generar resúmenes. Write That Down la guarda en el Keychain de este Mac y sólo la entrega al proceso aislado de Pi."
+                "Authentication methods and compatible models are read from your installed Pi version.",
+                spanish: "Los métodos de autenticación y modelos compatibles se leen de tu versión instalada de Pi."
             ))
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .font(.callout)
+            .foregroundStyle(.secondary)
 
-            SecureField("API key", text: $apiKey)
-                .textFieldStyle(.roundedBorder)
-                .focused($keyFieldFocused)
-                .onSubmit(save)
+            if workspace.isConnectingProvider {
+                authProgress
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(conversationLanguage.text("Connect with", spanish: "Conectar con"))
+                        .font(.headline)
+                    ForEach(provider.authMethods) { method in
+                        Button {
+                            onConnectProvider(provider.id, method.kind)
+                        } label: {
+                            HStack {
+                                Image(systemName: method.kind == .oauth ? "person.crop.circle.badge.checkmark" : "key.fill")
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(method.loginLabel ?? method.name)
+                                    if method.isSubscription {
+                                        Text(conversationLanguage.text("Uses your provider subscription", spanish: "Usa tu suscripción del proveedor"))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!method.isInteractive)
+                    }
+                }
 
-            if let errorMessage, !errorMessage.isEmpty {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 11))
+                if provider.isConfigured {
+                    Button(role: .destructive) {
+                        onDisconnectProvider(provider.id)
+                    } label: {
+                        Text(conversationLanguage.text("Disconnect \(provider.name)", spanish: "Desconectar \(provider.name)"))
+                    }
+                }
+            }
+
+            if let error = workspace.configurationError, !error.isEmpty {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
                     .foregroundStyle(.red)
             }
 
-            HStack {
-                Spacer()
-                Button(conversationLanguage.text("Cancel", spanish: "Cancelar")) {
-                    apiKey = ""
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-
-                Button(conversationLanguage.text("Save", spanish: "Guardar")) { save() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(ConversationPalette.accent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Divider()
+            Text("\(provider.models.count) \(conversationLanguage.text("compatible models", spanish: "modelos compatibles"))")
+                .font(.headline)
+            Text(provider.models.prefix(8).map(\.title).joined(separator: " · "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if provider.models.count > 8 {
+                Text(conversationLanguage.text(
+                    "Choose the complete model list from the conversation toolbar after connecting.",
+                    spanish: "Elige de la lista completa de modelos en la barra de la conversación después de conectar."
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
-        .padding(24)
-        .frame(width: 450)
-        .onAppear { keyFieldFocused = true }
-        .onDisappear { apiKey = "" }
     }
 
-    private func save() {
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        apiKey = ""
-        onSave(key)
-        dismiss()
+    private var authProgress: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(workspace.authStatusMessage ?? conversationLanguage.text("Signing in…", spanish: "Iniciando sesión…"))
+            }
+            if let prompt = workspace.pendingAuthPrompt {
+                Text(prompt.message).font(.callout)
+                if prompt.kind == .select {
+                    ForEach(prompt.options) { option in
+                        Button(option.label) { onSubmitAuthPrompt(option.id) }
+                            .buttonStyle(.bordered)
+                    }
+                } else if prompt.kind == .secret {
+                    SecureField(prompt.placeholder ?? "", text: $promptValue)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    TextField(prompt.placeholder ?? "", text: $promptValue)
+                        .textFieldStyle(.roundedBorder)
+                }
+                if prompt.kind != .select {
+                    Button(conversationLanguage.text("Continue", spanish: "Continuar")) {
+                        let value = promptValue
+                        promptValue = ""
+                        onSubmitAuthPrompt(value)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(promptValue.isEmpty)
+                }
+            }
+            Button(conversationLanguage.text("Cancel sign-in", spanish: "Cancelar inicio de sesión"), action: onCancelAuth)
+                .buttonStyle(.borderless)
+        }
+        .padding(14)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct TranscriptionSettingsView: View {
+    @ObservedObject var model: StatusModel
+    let onSelect: (String) -> Void
+    let onDownload: (String) -> Void
+    let onDelete: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(conversationLanguage.text("Transcription engine", spanish: "Motor de transcripción"))
+                .font(.title2.weight(.semibold))
+            Text(conversationLanguage.text(
+                "Choose the local engine used for the next conversation. Downloaded models stay on this Mac.",
+                spanish: "Elige el motor local para la próxima conversación. Los modelos descargados permanecen en esta Mac."
+            ))
+            .foregroundStyle(.secondary)
+
+            List(model.engineOptions) { option in
+                HStack(spacing: 12) {
+                    Image(systemName: model.selectedEngineOptionID == option.id ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(model.selectedEngineOptionID == option.id ? .green : .secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(option.title).font(.headline)
+                        Text(option.summary.isEmpty ? option.detail : option.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    engineAction(option)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if model.installState(for: option).isReady && model.canChangeEngine { onSelect(option.id) }
+                }
+                .padding(.vertical, 5)
+            }
+            .listStyle(.inset)
+
+            if !model.canChangeEngine {
+                Label(conversationLanguage.text(
+                    "Finish the current recording before changing engines.",
+                    spanish: "Termina la grabación actual antes de cambiar de motor."
+                ), systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+    }
+
+    @ViewBuilder
+    private func engineAction(_ option: TranscriptionEngineOption) -> some View {
+        let state = model.installState(for: option)
+        switch state {
+        case .notDownloaded:
+            Button(conversationLanguage.text("Download", spanish: "Descargar")) { onDownload(option.id) }
+                .disabled(!model.canChangeEngine)
+        case let .downloading(progress):
+            ProgressView(value: progress).frame(width: 90)
+        case .failed:
+            Button(conversationLanguage.text("Retry", spanish: "Reintentar")) { onDownload(option.id) }
+        case .ready:
+            if option.isDownloadable && model.selectedEngineOptionID != option.id {
+                Button(role: .destructive) { onDelete(option.id) } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+            } else {
+                Text(conversationLanguage.text("Ready", spanish: "Listo"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
