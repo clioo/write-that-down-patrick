@@ -177,6 +177,28 @@ public final class ConversationWorkspaceModel: ObservableObject {
         }
     }
 
+    /// Initializes a workspace for a transcript loaded from disk. Chat remains
+    /// in memory for the current app launch, while any persisted summary is
+    /// restored from its sidecar file.
+    public func loadArchivedConversation(
+        startedAt: Date,
+        duration: TimeInterval,
+        summary savedSummary: String?
+    ) {
+        phase = .finished
+        selectedTab = .chat
+        messages.removeAll()
+        if let savedSummary, !savedSummary.isEmpty {
+            summary = .ready(savedSummary)
+        } else {
+            summary = .locked
+        }
+        sessionStartedAt = startedAt
+        sessionEndedAt = startedAt.addingTimeInterval(max(0, duration))
+        sessionError = nil
+        isAnswering = false
+    }
+
     public func setAssistantModels(_ models: [AssistantModel], selectedID: String?) {
         assistantModels = models
         if let selectedID, models.contains(where: { $0.id == selectedID }) {

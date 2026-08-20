@@ -14,6 +14,7 @@ public final class MainWindowController {
     private let statusModel: StatusModel
     private let captionModel: CaptionModel
     private let workspaceModel: ConversationWorkspaceModel
+    private let conversationLibrary: ConversationLibraryModel
     private var window: NSWindow?
 
     // Existing actions remain available to the coordinator and status surface.
@@ -30,28 +31,34 @@ public final class MainWindowController {
     var onAsk: (String) -> Void = { _ in }
     var onSelectAssistantModel: (String) -> Void = { _ in }
     var onSaveAssistantAPIKey: (String) -> Void = { _ in }
+    var onSelectConversation: (String?) -> Void = { _ in }
+    var onRefreshConversations: () -> Void = {}
+    var onGenerateSelectedSummary: () -> Void = {}
+    var onRevealConversation: (String) -> Void = { _ in }
 
     public init(
         statusModel: StatusModel,
         captionModel: CaptionModel,
-        workspaceModel: ConversationWorkspaceModel = ConversationWorkspaceModel()
+        workspaceModel: ConversationWorkspaceModel = ConversationWorkspaceModel(),
+        conversationLibrary: ConversationLibraryModel
     ) {
         self.statusModel = statusModel
         self.captionModel = captionModel
         self.workspaceModel = workspaceModel
+        self.conversationLibrary = conversationLibrary
     }
 
     private func makeWindowIfNeeded() {
         guard window == nil else { return }
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1_260, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 1_440, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Write That Down"
         window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 980, height: 580)
+        window.contentMinSize = NSSize(width: 1_180, height: 620)
         if ConversationPreviewArguments.isEnabled {
             window.appearance = NSAppearance(named: .aqua)
         }
@@ -60,11 +67,16 @@ public final class MainWindowController {
                 statusModel: statusModel,
                 captionModel: captionModel,
                 workspaceModel: workspaceModel,
+                conversationLibrary: conversationLibrary,
                 onStop: { [weak self] in self?.onStop() },
                 onOpenFolder: { [weak self] in self?.onOpenFolder() },
                 onAsk: { [weak self] question in self?.onAsk(question) },
                 onSelectAssistantModel: { [weak self] id in self?.onSelectAssistantModel(id) },
-                onSaveAssistantAPIKey: { [weak self] key in self?.onSaveAssistantAPIKey(key) }
+                onSaveAssistantAPIKey: { [weak self] key in self?.onSaveAssistantAPIKey(key) },
+                onSelectConversation: { [weak self] id in self?.onSelectConversation(id) },
+                onRefreshConversations: { [weak self] in self?.onRefreshConversations() },
+                onGenerateSelectedSummary: { [weak self] in self?.onGenerateSelectedSummary() },
+                onRevealConversation: { [weak self] path in self?.onRevealConversation(path) }
             )
             .preferredColorScheme(ConversationPreviewArguments.isEnabled ? .light : nil)
         )
@@ -101,11 +113,16 @@ private struct MainWindowView: View {
     @ObservedObject var statusModel: StatusModel
     @ObservedObject var captionModel: CaptionModel
     @ObservedObject var workspaceModel: ConversationWorkspaceModel
+    @ObservedObject var conversationLibrary: ConversationLibraryModel
     var onStop: () -> Void
     var onOpenFolder: () -> Void
     var onAsk: (String) -> Void
     var onSelectAssistantModel: (String) -> Void
     var onSaveAssistantAPIKey: (String) -> Void
+    var onSelectConversation: (String?) -> Void
+    var onRefreshConversations: () -> Void
+    var onGenerateSelectedSummary: () -> Void
+    var onRevealConversation: (String) -> Void
 
     @State private var transcriptCopied = false
     @State private var copyResetTask: Task<Void, Never>?
@@ -117,19 +134,34 @@ private struct MainWindowView: View {
             Divider()
 
             HStack(spacing: 0) {
-                ConversationTranscriptPane(model: captionModel, startedAt: effectiveStartedAt)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ConversationSidebar(
+                    model: conversationLibrary,
+                    isRecording: statusModel.canStop,
+                    onSelect: onSelectConversation,
+                    onRefresh: onRefreshConversations
+                )
+
+                Divider()
+
+                ConversationTranscriptPane(
+                    segments: displayedSegments,
+                    partial: displayedPartial,
+                    startedAt: effectiveStartedAt
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 Divider()
 
                 ConversationAssistantPane(
-                    model: workspaceModel,
+                    model: selectedWorkspace,
                     onAsk: onAsk,
                     onSelectModel: { id in
-                        workspaceModel.selectedAssistantModelID = id
+                        selectedWorkspace.selectedAssistantModelID = id
                         onSelectAssistantModel(id)
                     },
-                    onConfigure: { apiKeySheetShown = true }
+                    onConfigure: { apiKeySheetShown = true },
+                    canGenerateSummary: conversationLibrary.selectedConversation != nil,
+                    onGenerateSummary: onGenerateSelectedSummary
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -140,7 +172,7 @@ private struct MainWindowView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $apiKeySheetShown) {
             AssistantAPIKeySheet(
-                errorMessage: workspaceModel.configurationError,
+                errorMessage: selectedWorkspace.configurationError,
                 onSave: onSaveAssistantAPIKey
             )
         }
@@ -150,7 +182,23 @@ private struct MainWindowView: View {
     }
 
     private var effectiveStartedAt: Date? {
-        workspaceModel.sessionStartedAt ?? captionModel.sessionStartedAt
+        selectedWorkspace.sessionStartedAt ?? captionModel.sessionStartedAt
+    }
+
+    private var selectedWorkspace: ConversationWorkspaceModel {
+        conversationLibrary.selectedWorkspace
+    }
+
+    private var displayedSegments: [Segment] {
+        conversationLibrary.selectedConversation?.segments ?? captionModel.finals
+    }
+
+    private var displayedPartial: String {
+        conversationLibrary.selectedConversation == nil ? captionModel.partial : ""
+    }
+
+    private var selectedTranscriptText: String {
+        conversationLibrary.selectedConversation?.transcriptText ?? captionModel.fullTranscriptText
     }
 
     private var header: some View {
@@ -181,10 +229,10 @@ private struct MainWindowView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.large)
-            .disabled(captionModel.finals.isEmpty)
+            .disabled(displayedSegments.isEmpty)
             .accessibilityLabel(conversationLanguage.text("Copy transcript", spanish: "Copiar transcripción"))
 
-            if statusModel.canStop {
+            if statusModel.canStop && conversationLibrary.selectedConversation == nil {
                 Button(action: onStop) {
                     Label(conversationLanguage.text("End", spanish: "Terminar"), systemImage: "stop.fill")
                         .frame(minWidth: 94)
@@ -193,8 +241,8 @@ private struct MainWindowView: View {
                 .tint(.red)
                 .controlSize(.large)
                 .keyboardShortcut(".", modifiers: [.command])
-            } else if workspaceModel.phase == .finished {
-                Button(action: onOpenFolder) {
+            } else if selectedWorkspace.phase == .finished {
+                Button(action: revealSelectedConversation) {
                     Label(conversationLanguage.text("View file", spanish: "Ver archivo"), systemImage: "doc.text")
                         .frame(minWidth: 94)
                 }
@@ -208,7 +256,7 @@ private struct MainWindowView: View {
     }
 
     private var title: String {
-        switch workspaceModel.phase {
+        switch selectedWorkspace.phase {
         case .idle: return conversationLanguage.text("Ready for a conversation", spanish: "Listo para una conversación")
         case .starting: return conversationLanguage.text("Preparing the conversation", spanish: "Preparando la conversación")
         case .live: return conversationLanguage.text("Conversation in progress", spanish: "Conversación en curso")
@@ -230,7 +278,7 @@ private struct MainWindowView: View {
     }
 
     private var statusPresentation: (text: String, symbol: String, color: Color) {
-        switch workspaceModel.phase {
+        switch selectedWorkspace.phase {
         case .idle: return (conversationLanguage.text("Waiting", spanish: "Esperando"), "waveform", .secondary)
         case .starting: return (conversationLanguage.text("Starting", spanish: "Iniciando"), "waveform", .orange)
         case .live: return (conversationLanguage.text("Transcribing", spanish: "Transcribiendo"), "waveform", .green)
@@ -248,13 +296,13 @@ private struct MainWindowView: View {
                 Text("24:18")
                     .monospacedDigit()
             } else if let startedAt = effectiveStartedAt,
-               workspaceModel.phase == .live || workspaceModel.phase == .starting {
+               selectedWorkspace.phase == .live || selectedWorkspace.phase == .starting {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(Self.formatDuration(context.date.timeIntervalSince(startedAt)))
                         .monospacedDigit()
                 }
             } else {
-                Text(Self.formatDuration(workspaceModel.duration ?? 0))
+                Text(Self.formatDuration(selectedWorkspace.duration ?? 0))
                     .monospacedDigit()
             }
         }
@@ -284,12 +332,20 @@ private struct MainWindowView: View {
     private func copyTranscript() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(captionModel.fullTranscriptText, forType: .string)
+        pasteboard.setString(selectedTranscriptText, forType: .string)
         transcriptCopied = true
         copyResetTask?.cancel()
         copyResetTask = Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             if !Task.isCancelled { transcriptCopied = false }
+        }
+    }
+
+    private func revealSelectedConversation() {
+        if let path = conversationLibrary.selectedConversation?.fileURL.path {
+            onRevealConversation(path)
+        } else {
+            onOpenFolder()
         }
     }
 
@@ -305,10 +361,145 @@ private struct MainWindowView: View {
     }
 }
 
+// MARK: - Conversation navigation
+
+private struct ConversationSidebar: View {
+    @ObservedObject var model: ConversationLibraryModel
+    let isRecording: Bool
+    let onSelect: (String?) -> Void
+    let onRefresh: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(conversationLanguage.text("Conversations", spanish: "Conversaciones"))
+                    .font(.system(size: 15, weight: .bold))
+                Spacer()
+                Button(action: onRefresh) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help(conversationLanguage.text("Refresh conversations", spanish: "Actualizar conversaciones"))
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+
+            conversationButton(
+                id: nil,
+                title: conversationLanguage.text("Current conversation", spanish: "Conversación actual"),
+                subtitle: isRecording
+                    ? conversationLanguage.text("Recording now", spanish: "Grabando ahora")
+                    : conversationLanguage.text("Ready to record", spanish: "Lista para grabar"),
+                symbol: isRecording ? "waveform.circle.fill" : "waveform",
+                tint: isRecording ? .red : .secondary
+            )
+            .padding(.horizontal, 8)
+
+            HStack {
+                Text(conversationLanguage.text("Recent", spanish: "Recientes"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+            .padding(.bottom, 7)
+
+            if model.conversations.isEmpty {
+                Text(conversationLanguage.text(
+                    "Saved conversations will appear here.",
+                    spanish: "Las conversaciones guardadas aparecerán aquí."
+                ))
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        ForEach(model.conversations) { conversation in
+                            conversationButton(
+                                id: conversation.id,
+                                title: Self.dateFormatter.string(from: conversation.startedAt),
+                                subtitle: durationText(conversation.duration),
+                                symbol: "text.document",
+                                tint: ConversationPalette.accent
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 12)
+                }
+            }
+        }
+        .frame(width: 228)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.secondary.opacity(0.035))
+    }
+
+    private func conversationButton(
+        id: String?,
+        title: String,
+        subtitle: String,
+        symbol: String,
+        tint: Color
+    ) -> some View {
+        let selected = model.selectedConversationID == id
+        return Button {
+            onSelect(id)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(tint)
+                    .frame(width: 18, height: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+            .background(
+                selected ? ConversationPalette.accent.opacity(0.12) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func durationText(_ duration: TimeInterval) -> String {
+        let minutes = max(0, Int((duration / 60).rounded()))
+        if minutes == 1 {
+            return conversationLanguage.text("1 minute", spanish: "1 minuto")
+        }
+        return conversationLanguage.text("\(minutes) minutes", spanish: "\(minutes) minutos")
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("MMM d, HH:mm")
+        return formatter
+    }()
+}
+
 // MARK: - Transcript pane
 
 private struct ConversationTranscriptPane: View {
-    @ObservedObject var model: CaptionModel
+    let segments: [Segment]
+    let partial: String
     let startedAt: Date?
 
     var body: some View {
@@ -319,7 +510,7 @@ private struct ConversationTranscriptPane: View {
                 .padding(.top, 28)
                 .padding(.bottom, 22)
 
-            if model.finals.isEmpty && model.partial.isEmpty {
+            if segments.isEmpty && partial.isEmpty {
                 VStack(spacing: 10) {
                     Spacer()
                     Image(systemName: "waveform")
@@ -343,17 +534,17 @@ private struct ConversationTranscriptPane: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(model.finals) { segment in
+                            ForEach(segments) { segment in
                                 transcriptRow(segment)
                                     .id(segment.id)
                             }
 
-                            if !model.partial.isEmpty {
+                            if !partial.isEmpty {
                                 HStack(alignment: .firstTextBaseline, spacing: 18) {
                                     Text("…")
                                         .frame(width: 48, alignment: .leading)
                                         .foregroundStyle(.tertiary)
-                                    Text(model.partial)
+                                    Text(partial)
                                         .foregroundStyle(.secondary)
                                         .italic()
                                         .textSelection(.enabled)
@@ -367,12 +558,12 @@ private struct ConversationTranscriptPane: View {
                         }
                         .padding(.horizontal, 32)
                     }
-                    .onChange(of: model.finals.count) { _ in
+                    .onChange(of: segments.count) { _ in
                         DispatchQueue.main.async {
                             proxy.scrollTo("conversation-live-edge", anchor: .bottom)
                         }
                     }
-                    .onChange(of: model.partial) { _ in
+                    .onChange(of: partial) { _ in
                         DispatchQueue.main.async {
                             proxy.scrollTo("conversation-live-edge", anchor: .bottom)
                         }
@@ -424,6 +615,8 @@ private struct ConversationAssistantPane: View {
     var onAsk: (String) -> Void
     var onSelectModel: (String) -> Void
     var onConfigure: () -> Void
+    var canGenerateSummary: Bool
+    var onGenerateSummary: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -464,7 +657,12 @@ private struct ConversationAssistantPane: View {
             case .chat:
                 ConversationChatView(model: model, onAsk: onAsk, onConfigure: onConfigure)
             case .summary:
-                ConversationSummaryView(model: model, onConfigure: onConfigure)
+                ConversationSummaryView(
+                    model: model,
+                    onConfigure: onConfigure,
+                    canGenerateSummary: canGenerateSummary,
+                    onGenerateSummary: onGenerateSummary
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -728,6 +926,8 @@ private struct ConversationMessageBubble: View {
 private struct ConversationSummaryView: View {
     @ObservedObject var model: ConversationWorkspaceModel
     var onConfigure: () -> Void
+    var canGenerateSummary: Bool
+    var onGenerateSummary: () -> Void
 
     var body: some View {
         Group {
@@ -764,6 +964,14 @@ private struct ConversationSummaryView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 340)
+                if canGenerateSummary && model.phase == .finished {
+                    Button(
+                        conversationLanguage.text("Generate summary", spanish: "Generar resumen"),
+                        action: onGenerateSummary
+                    )
+                    .buttonStyle(.borderedProminent)
+                    .tint(ConversationPalette.accent)
+                }
             }
 
         case .generating:

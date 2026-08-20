@@ -47,7 +47,14 @@ copy.
 
 ![The live transcript and OpenCode Go conversation chat shown side by side](docs/screenshots/conversation-chat.png)
 
-### 3. Finish with the important parts already organized
+### 3. Reopen any conversation and keep asking
+
+Open the full app from the menu-bar widget at any time. The conversation
+sidebar indexes your saved Markdown transcripts, so you can move between past
+meetings, reread what happened, ask a new question, or generate a missing
+summary without finding and copying a file path.
+
+### 4. Finish with the important parts already organized
 
 When recording ends, the transcript is finalized first. If OpenCode Go is
 configured, Write That Down then generates a summary centered on supported
@@ -61,7 +68,10 @@ the underlying transcript from being saved.
 - **Local live transcription.** Microphone and system audio are mixed and
   transcribed on the Mac with a local speech engine.
 - **A conversation-aware workspace.** Follow the transcript and ask grounded
-  questions without switching apps.
+  questions without switching apps, then revisit saved conversations from the
+  built-in history.
+- **An app you can reopen anytime.** Choose **Open Write That Down** in the
+  menu-bar widget even when no meeting is being recorded.
 - **A useful finish.** The completed transcript is saved first; an OpenCode Go
   summary is generated afterward when the assistant is configured.
 - **English or Spanish UI.** Write That Down follows the primary macOS language
@@ -208,7 +218,9 @@ and begin a new episode after granting access.
 
 ## Use it
 
-1. Launch Write That Down and leave it running in the menu bar.
+1. Launch Write That Down and leave it running in the menu bar. Choose
+   **Open Write That Down** there whenever you want the full conversation
+   workspace.
 2. Join Zoom, Teams, or a visible Google Meet. For WhatsApp or another ambiguous
    source, approve the compact prompt only when you want a transcript.
 3. Follow the live transcript in the conversation window or floating caption
@@ -217,7 +229,8 @@ and begin a new episode after granting access.
    conversation.
 5. Stop manually, or let microphone release / sustained inactivity finalize the
    session.
-6. Read the final transcript and, when configured, the generated summary.
+6. Select any saved conversation in the sidebar to reread it, ask follow-up
+   questions, or generate its summary.
 
 By default the files look like this:
 
