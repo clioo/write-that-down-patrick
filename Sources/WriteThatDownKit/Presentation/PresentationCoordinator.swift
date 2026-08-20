@@ -42,12 +42,14 @@ public final class PresentationCoordinator: Presenting {
     private let captionModel: CaptionModel
     private let statusModel: StatusModel
     private let workspaceModel: ConversationWorkspaceModel
+    private let dictationModel: DictationSettingsModel
     private let conversationLibrary: ConversationLibraryModel
     private let captionSurface: CaptionSurface
     private let statusSurface: StatusSurface
     private let mainWindow: MainWindowController
     private let notifications: NotificationService
     private let recordingPromptSurface = RecordingPromptSurface()
+    private let dictationOverlay = DictationOverlaySurface()
     private let outputDir: URL
     private let conversationAssistant: any ConversationAssistant
     private var answerTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -113,6 +115,27 @@ public final class PresentationCoordinator: Presenting {
             mainWindow.onDeleteEngineOption = { [weak self] id in self?.onDeleteEngineOption?(id) }
         }
     }
+    public var onSetDictationEnabled: ((Bool) -> Void)? {
+        didSet {
+            mainWindow.onSetDictationEnabled = { [weak self] enabled in
+                self?.onSetDictationEnabled?(enabled)
+            }
+        }
+    }
+    public var onRequestDictationAccessibility: (() -> Void)? {
+        didSet {
+            mainWindow.onRequestDictationAccessibility = { [weak self] in
+                self?.onRequestDictationAccessibility?()
+            }
+        }
+    }
+    public var onOpenAccessibilitySettings: (() -> Void)? {
+        didSet {
+            mainWindow.onOpenAccessibilitySettings = { [weak self] in
+                self?.onOpenAccessibilitySettings?()
+            }
+        }
+    }
 
     public init(
         outputDir: URL,
@@ -125,6 +148,7 @@ public final class PresentationCoordinator: Presenting {
         let captionModel = CaptionModel()
         let statusModel = StatusModel()
         let workspaceModel = ConversationWorkspaceModel()
+        let dictationModel = DictationSettingsModel()
         let conversationLibrary = ConversationLibraryModel(
             outputDir: outputDir,
             currentWorkspace: workspaceModel,
@@ -133,6 +157,7 @@ public final class PresentationCoordinator: Presenting {
         self.captionModel = captionModel
         self.statusModel = statusModel
         self.workspaceModel = workspaceModel
+        self.dictationModel = dictationModel
         self.conversationLibrary = conversationLibrary
         self.captionSurface = CaptionSurface(model: captionModel)
         self.statusSurface = StatusSurface(model: statusModel)
@@ -140,6 +165,7 @@ public final class PresentationCoordinator: Presenting {
             statusModel: statusModel,
             captionModel: captionModel,
             workspaceModel: workspaceModel,
+            dictationModel: dictationModel,
             conversationLibrary: conversationLibrary
         )
 
@@ -253,6 +279,32 @@ public final class PresentationCoordinator: Presenting {
         statusModel.modelDetail = option.detail
         if resetHealth {
             statusModel.engineHealth = .untested
+        }
+    }
+
+    public func updateDictation(
+        enabled: Bool,
+        accessibilityGranted: Bool,
+        phase: LocalDictationPhase,
+        targetApplicationName: String?,
+        engineName: String,
+        errorMessage: String?
+    ) {
+        dictationModel.isEnabled = enabled
+        dictationModel.accessibilityGranted = accessibilityGranted
+        dictationModel.phase = phase
+        dictationModel.targetApplicationName = targetApplicationName
+        dictationModel.errorMessage = errorMessage
+
+        if phase == .idle {
+            dictationOverlay.hide()
+        } else {
+            dictationOverlay.show(
+                phase: phase,
+                engineName: engineName.isEmpty ? statusModel.selectedEngineOption?.title ?? "" : engineName,
+                targetApplicationName: targetApplicationName,
+                message: errorMessage
+            )
         }
     }
 

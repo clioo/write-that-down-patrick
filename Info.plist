@@ -24,7 +24,7 @@
 	<!-- TCC usage strings. Required so macOS can attribute and display the
 	     permission prompts when capture / transcription start. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Write That Down transcribes calls locally. Audio never leaves this Mac; if you configure the AI assistant, the transcript and your questions are sent as text to OpenCode Go.</string>
+	<string>Write That Down transcribes meetings and optional global dictation locally. Audio never leaves this Mac; if you configure the AI assistant, transcript text and your questions are sent only to the provider you select.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Write That Down can use the on-device speech recognizer to transcribe call audio. Recognition runs entirely on this Mac.</string>
 	<!-- Screen Recording permission (required by ScreenCaptureKit even for

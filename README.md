@@ -60,14 +60,24 @@ the choice of local engine and downloaded model for the next conversation.
 | --- | --- |
 | ![OpenAI Codex selected in the Pi provider settings, with ChatGPT subscription sign-in available](docs/screenshots/provider-settings.png) | ![The transcription settings showing Parakeet, WhisperKit, and Apple Speech options](docs/screenshots/transcription-settings.png) |
 
-### 4. Reopen any conversation and keep asking
+### 4. Dictate into any app with the same local model
+
+Enable **⌘E Dictation** in Settings, select a text field in any app, and press
+`⌘E` to listen. Press it again to transcribe and insert the result at the cursor.
+It follows the engine selected in the Transcription tab, captures microphone
+audio only, keeps that audio in memory, and never creates a meeting or contacts
+an AI provider.
+
+![The optional global dictation shortcut using the selected local transcription model](docs/screenshots/dictation-settings.jpg)
+
+### 5. Reopen any conversation and keep asking
 
 Open the full app from the menu-bar widget at any time. The conversation
 sidebar indexes your saved Markdown transcripts, so you can move between past
 meetings, reread what happened, ask a new question, or generate a missing
 summary without finding and copying a file path.
 
-### 5. Finish with the important parts already organized
+### 6. Finish with the important parts already organized
 
 When recording ends, the transcript is finalized first. If an AI provider is
 configured, Write That Down then generates a summary centered on supported
@@ -80,6 +90,8 @@ the underlying transcript from being saved.
 
 - **Local live transcription.** Microphone and system audio are mixed and
   transcribed on the Mac with a local speech engine.
+- **Local dictation anywhere.** An optional global `⌘E` shortcut writes speech
+  into the selected text field with the same local transcription model.
 - **A conversation-aware workspace.** Follow the transcript and ask grounded
   questions without switching apps, then revisit saved conversations from the
   built-in history.
@@ -128,6 +140,7 @@ boundary is:
 | --- | --- |
 | Captured microphone and system audio | Stays on the Mac and is never sent to an AI provider |
 | Speech recognition | Runs locally with the selected transcription engine |
+| Global dictation | Captures microphone audio in memory, transcribes locally, and inserts only the resulting text into the selected field |
 | Markdown transcript | Is stored locally in the configured output directory |
 | A live assistant question | Sends the current final transcript text, the question, and bounded in-session chat context to the selected provider and model |
 | End-of-meeting summary | Sends the completed final transcript text to the selected provider and model, then stores the returned summary locally |
@@ -228,6 +241,8 @@ macOS may request:
   though Write That Down captures audio rather than screen video.
 - **Notifications** — optional; used for recording and error alerts.
 - **Speech Recognition** — requested only when Apple's native engine is selected.
+- **Accessibility** — requested only when global `⌘E` dictation is enabled; it
+  lets Write That Down insert the local transcript into the selected field.
 
 If a required permission is missing, recording remains blocked and the app shows
 a visible error. Grant access in **System Settings → Privacy & Security**, then
@@ -251,6 +266,15 @@ and begin a new episode after granting access.
    session.
 6. Select any saved conversation in the sidebar to reread it, ask follow-up
    questions, or generate its summary.
+
+For local dictation outside meetings:
+
+1. Open **Settings → Dictation** and enable **⌘E dictation**.
+2. Grant Accessibility access when macOS asks.
+3. Select a writable text field in any app and press `⌘E`.
+4. Speak, then press `⌘E` again to transcribe and insert at the cursor.
+
+Dictation is intentionally unavailable during an active meeting recording.
 
 By default the files look like this:
 

@@ -1,6 +1,6 @@
 # Write That Down Specification
 
-Status: Draft v3 (source-aware detection and Pi provider settings)
+Status: Draft v4 (source-aware meetings, Pi providers, and local global dictation)
 
 Purpose: Define a macOS application that detects likely meetings, transcribes
 their audio in real time and locally, displays a live conversation workspace,
@@ -46,6 +46,8 @@ Important boundary:
 - Distinguish recognized meeting sources from ambiguous microphone activity.
 - Simultaneously capture system audio and microphone audio.
 - Transcribe captured audio in real time using a swappable transcription engine.
+- Optionally reuse the selected local transcription engine for global, microphone-only
+  dictation into the focused text field through a configurable `Command-E` shortcut.
 - Display a live transcript and conversation workspace during the call.
 - Present the interface in English or Spanish according to the primary macOS
   language, with English as the fallback for unsupported languages.
@@ -137,6 +139,14 @@ Important boundary:
   - Restores each selected transcript and its saved summary, when present, as
     assistant context without requiring the user to copy a filesystem path.
 
+12. `Global Dictation Controller`
+
+  - Registers `Command-E` only after the user enables global dictation in Settings.
+  - Captures microphone audio only and runs the engine selected for transcription.
+  - Inserts the resulting text at the focused insertion point through macOS Accessibility.
+  - MUST NOT create a recording session, transcript file, or assistant request.
+  - MUST refuse to start while a meeting session is active.
+
 ### 3.2 Abstraction Levels
 
 The service is easiest to port and maintain when kept in these layers:
@@ -178,6 +188,7 @@ The service is easiest to port and maintain when kept in these layers:
 - Local filesystem for transcripts.
 - Operating system notification system.
 - Operating system permissions for microphone and audio capture.
+- macOS Accessibility permission when optional global dictation is enabled.
 - macOS Keychain for provider API keys and OAuth tokens.
 - Selected provider network access for chat and summary requests.
 - A minimal Pi model runtime supporting the protocol used by the selected
@@ -591,6 +602,10 @@ accepted from its JSON file; they belong exclusively in the credential store.
   document this location so the user can control its confidentiality.
 - Provider-side handling and retention MAY vary by provider and model; the model
   selection UI SHOULD expose or link to the applicable policy when available.
+- Global dictation audio MUST remain in memory, MUST use microphone input only,
+  and MUST NOT be persisted or sent to an assistant provider.
+- Accessibility access MUST be used only to identify the focused writable control
+  and insert the locally transcribed result requested by the user.
 
 ## 13. Integrated Conversation Assistant
 

@@ -5,19 +5,19 @@ import AVFoundation
 /// samples at `targetSampleRate` to a sink closure.
 ///
 /// Used internally by `AudioCapturer`; not a standalone `AudioCapturing`.
-final class MicrophoneCapturer: @unchecked Sendable {
+public final class MicrophoneCapturer: @unchecked Sendable {
     private let targetSampleRate: Double
     private let engine = AVAudioEngine()
     private var installed = false
     private let lock = NSLock()
 
-    init(targetSampleRate: Double) {
+    public init(targetSampleRate: Double) {
         self.targetSampleRate = targetSampleRate
     }
 
     /// Installs a tap on the input node and starts the engine. `onSamples` is
     /// invoked on the audio render thread for each tap buffer.
-    func start(onSamples: @escaping @Sendable ([Float]) -> Void) throws {
+    public func start(onSamples: @escaping @Sendable ([Float]) -> Void) throws {
         lock.lock(); defer { lock.unlock() }
         guard !installed else { return }
 
@@ -45,7 +45,7 @@ final class MicrophoneCapturer: @unchecked Sendable {
         Log.capture.info("MicrophoneCapturer started.")
     }
 
-    func stop() {
+    public func stop() {
         lock.lock(); defer { lock.unlock() }
         guard installed else { return }
         engine.inputNode.removeTap(onBus: 0)
