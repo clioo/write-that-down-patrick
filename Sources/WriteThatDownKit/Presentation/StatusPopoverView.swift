@@ -36,6 +36,7 @@ public final class StatusModel: ObservableObject {
     @Published public var modelDetail = ""
     @Published public var engineOptions: [TranscriptionEngineOption] = []
     @Published public var selectedEngineOptionID = ""
+    @Published public var modelInstallStates: [String: ModelInstallState] = [:]
     @Published public var engineHealth: EngineHealth = .untested
 
     /// Where transcripts are written (folder), for the open/copy actions.
@@ -54,6 +55,10 @@ public final class StatusModel: ObservableObject {
 
     public var selectedEngineOption: TranscriptionEngineOption? {
         engineOptions.first { $0.id == selectedEngineOptionID }
+    }
+
+    public func installState(for option: TranscriptionEngineOption) -> ModelInstallState {
+        modelInstallStates[option.id] ?? (option.isDownloadable ? .notDownloaded : .ready)
     }
 
     /// The captions toggle is available during a live session AND while idle
@@ -82,10 +87,13 @@ struct StatusPopoverView: View {
     var onToggleCaptions: () -> Void
     var onOpenFolder: () -> Void
     var onSelectEngineOption: (String) -> Void
+    var onDownloadEngineOption: (String) -> Void
+    var onDeleteEngineOption: (String) -> Void
     var onQuit: () -> Void
 
     @State private var pathCopied = false
     @State private var copyResetTask: Task<Void, Never>?
+    @State private var modelPickerShown = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -175,18 +183,31 @@ struct StatusPopoverView: View {
     private var engineSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             if !model.engineOptions.isEmpty {
-                Picker("Transcription", selection: Binding(
-                    get: { model.selectedEngineOptionID },
-                    set: { onSelectEngineOption($0) }
-                )) {
-                    ForEach(model.engineOptions) { option in
-                        Text(option.title).tag(option.id)
+                Button {
+                    modelPickerShown.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(model.selectedEngineOption?.title ?? "Select model")
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .pickerStyle(.menu)
+                .buttonStyle(.bordered)
                 .controlSize(.small)
-                .labelsHidden()
-                .disabled(!model.canChangeEngine || model.engineOptions.count < 2)
+                .disabled(!model.canChangeEngine)
+                .popover(isPresented: $modelPickerShown, arrowEdge: .trailing) {
+                    SpeechModelPickerView(
+                        model: model,
+                        isPresented: $modelPickerShown,
+                        onSelect: onSelectEngineOption,
+                        onDownload: onDownloadEngineOption,
+                        onDelete: onDeleteEngineOption
+                    )
+                }
             }
             HStack(spacing: 6) {
                 Image(systemName: "cpu")
@@ -244,5 +265,167 @@ struct StatusPopoverView: View {
         case .saved: return .green
         case .failed: return .red
         }
+    }
+}
+
+/// Rich model catalog inspired by Orca's open-source speech-model picker:
+/// installation state, progress, metadata, selection, and deletion all live in
+/// one compact surface while the app layer owns the actual side effects.
+private struct SpeechModelPickerView: View {
+    @ObservedObject var model: StatusModel
+    @Binding var isPresented: Bool
+    var onSelect: (String) -> Void
+    var onDownload: (String) -> Void
+    var onDelete: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Speech Model")
+                    .font(.headline)
+                Text("Downloaded models run entirely on this Mac.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.engineOptions) { option in
+                        modelRow(option)
+                        if option.id != model.engineOptions.last?.id {
+                            Divider().padding(.leading, 42)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 440, height: 330)
+    }
+
+    private func modelRow(_ option: TranscriptionEngineOption) -> some View {
+        let state = model.installState(for: option)
+        let selected = model.selectedEngineOptionID == option.id
+        let busy: Bool = {
+            if case .downloading = state { return true }
+            return false
+        }()
+
+        return HStack(alignment: .center, spacing: 8) {
+            Button {
+                guard model.canChangeEngine else { return }
+                if state.isReady {
+                    onSelect(option.id)
+                    isPresented = false
+                } else if option.isDownloadable && !busy {
+                    onDownload(option.id)
+                }
+            } label: {
+                HStack(alignment: .top, spacing: 9) {
+                    ZStack {
+                        if selected && state.isReady {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .semibold))
+                        } else if busy {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                    .frame(width: 16, height: 18)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(option.title)
+                                .font(.system(size: 13, weight: .semibold))
+                            badge(option.isStreaming ? "streaming" : "offline", color: .secondary)
+                            if option.isRecommended {
+                                badge("recommended", color: .green)
+                            }
+                            if let bytes = option.sizeBytes {
+                                Text(Self.formattedSize(bytes))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if case let .downloading(progress) = state {
+                                Text("\(Int((progress * 100).rounded()))%")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if !option.summary.isEmpty {
+                            Text(option.summary)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if case let .failed(message) = state {
+                            Text(message)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.red)
+                                .lineLimit(2)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canChangeEngine || (!state.isReady && !option.isDownloadable) || busy)
+
+            trailingAction(for: option, state: state, selected: selected)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func trailingAction(
+        for option: TranscriptionEngineOption,
+        state: ModelInstallState,
+        selected: Bool
+    ) -> some View {
+        if option.isDownloadable && state.isReady && !selected {
+            Button {
+                onDelete(option.id)
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Delete \(option.title)")
+            .disabled(!model.canChangeEngine)
+        } else if option.isDownloadable {
+            switch state {
+            case .notDownloaded, .failed:
+                Button {
+                    onDownload(option.id)
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Download \(option.title)")
+                .disabled(!model.canChangeEngine)
+            case .downloading:
+                EmptyView()
+            case .ready:
+                EmptyView()
+            }
+        }
+    }
+
+    private func badge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.12), in: Capsule())
+    }
+
+    private static func formattedSize(_ bytes: Int64) -> String {
+        "\(Int((Double(bytes) / 1_000_000).rounded())) MB"
     }
 }

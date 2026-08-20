@@ -16,6 +16,7 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
     public var excludedApps: [String]?
     public var whisperModel: String?
     public var whisperModelFolder: String?
+    public var speechModel: String?
 
     public init(
         outputDir: String? = nil,
@@ -27,7 +28,8 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
         startRetryCooldownMs: Int? = nil,
         excludedApps: [String]? = nil,
         whisperModel: String? = nil,
-        whisperModelFolder: String? = nil
+        whisperModelFolder: String? = nil,
+        speechModel: String? = nil
     ) {
         self.outputDir = outputDir
         self.language = language
@@ -39,6 +41,7 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
         self.excludedApps = excludedApps
         self.whisperModel = whisperModel
         self.whisperModelFolder = whisperModelFolder
+        self.speechModel = speechModel
     }
 
     /// Decodes the JSON config-file format. Throws on malformed JSON or
@@ -75,7 +78,8 @@ public struct ConfigOverrides: Decodable, Sendable, Equatable {
                 raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             },
             whisperModel: env["WTD_WHISPER_MODEL"],
-            whisperModelFolder: env["WTD_WHISPER_MODEL_FOLDER"]
+            whisperModelFolder: env["WTD_WHISPER_MODEL_FOLDER"],
+            speechModel: env["WTD_SPEECH_MODEL"]
         )
         return (overrides, warnings)
     }
@@ -115,6 +119,9 @@ extension AppConfiguration {
         }
         if let v = overrides.whisperModelFolder, !v.isEmpty {
             config.whisperModelFolder = AppConfiguration.expandTilde(v)
+        }
+        if let v = overrides.speechModel, !v.isEmpty {
+            config.speechModel = v
         }
         return (config, warnings)
     }

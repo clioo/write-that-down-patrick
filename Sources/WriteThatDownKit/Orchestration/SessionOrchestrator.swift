@@ -13,8 +13,10 @@ import Foundation
 public actor SessionOrchestrator {
 
     public enum Event: Sendable {
-        case micSample(Bool)
+        case micSample(MicActivitySample)
         case audio(AudioBuffer)
+        case acceptRecordingPrompt(UUID)
+        case declineRecordingPrompt(UUID)
         case manualStop
         case shutdown
     }
@@ -29,6 +31,7 @@ public actor SessionOrchestrator {
     private let engineSelection: @Sendable () -> TranscriptionEngineOption
     private let presenter: any Presenting
     private let permissions: PermissionChecking
+    private let callStartPolicy: CallStartPolicy
     private let now: @Sendable () -> Date
 
     // MARK: State (single authoritative copy, §4.1.5)
@@ -43,6 +46,14 @@ public actor SessionOrchestrator {
     /// Consecutive mic-active polls observed while Idle — the "confirm window"
     /// counter (§5.2). A session starts only once this reaches `requiredStartTicks`.
     private var pendingStartTicks = 0
+    /// Classification key currently accumulating the confirm window. A source
+    /// change resets the window so unrelated apps cannot combine their ticks.
+    private var pendingStartFingerprint: String?
+    private var pendingRecordingPrompt: RecordingPrompt?
+    /// Accepting or declining an ambiguous candidate handles that entire mic-on
+    /// episode. It is re-armed only after all non-excluded mic sources release.
+    private var suppressConfirmationUntilMicOff = false
+    private var lastMicSample = MicActivitySample.inactive
     private var permissionsOK = false
     private var didWarnPermission = false
     /// When the last session-startup failure occurred. While set and within
@@ -90,6 +101,7 @@ public actor SessionOrchestrator {
         engineSelection: (@Sendable () -> TranscriptionEngineOption)? = nil,
         presenter: any Presenting,
         permissions: PermissionChecking,
+        callStartPolicy: CallStartPolicy = CallStartPolicy(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.config = config
@@ -100,6 +112,7 @@ public actor SessionOrchestrator {
         self.engineSelection = engineSelection ?? { TranscriptionEngineOption.from(config) }
         self.presenter = presenter
         self.permissions = permissions
+        self.callStartPolicy = callStartPolicy
         self.now = now
         self.state = RuntimeState(
             engineID: config.engine.rawValue,
@@ -133,6 +146,17 @@ public actor SessionOrchestrator {
         eventContinuation.yield(.manualStop)
     }
 
+    /// Accepts a non-blocking recording prompt. Stale IDs are ignored.
+    public nonisolated func acceptRecordingPrompt(_ id: UUID) {
+        eventContinuation.yield(.acceptRecordingPrompt(id))
+    }
+
+    /// Declines a non-blocking recording prompt. The same mic-on episode remains
+    /// suppressed until the microphone is released.
+    public nonisolated func declineRecordingPrompt(_ id: UUID) {
+        eventContinuation.yield(.declineRecordingPrompt(id))
+    }
+
     /// Requests a clean shutdown: stops the detector, finalizes any in-progress
     /// session, and ends the event loop. Routed through the serial event loop (not
     /// run as a separate actor task) so it cannot interleave with an in-flight
@@ -160,12 +184,15 @@ public actor SessionOrchestrator {
         switch event {
         case let .micSample(active): await handleMicSample(active)
         case let .audio(buffer): await handleAudio(buffer)
+        case let .acceptRecordingPrompt(id): await handleRecordingPromptAccepted(id)
+        case let .declineRecordingPrompt(id): await handleRecordingPromptDeclined(id)
         case .manualStop:
             if state.sessionStatus == .recording {
                 await finalizeSession(reason: .manual)
             }
         case .shutdown:
             detector.stop()
+            await dismissRecordingPrompt()
             if state.sessionStatus == .recording {
                 await finalizeSession(reason: .manual)
             }
@@ -175,62 +202,14 @@ public actor SessionOrchestrator {
 
     // MARK: Detection (§5, §14.1)
 
-    private func handleMicSample(_ active: Bool) async {
+    private func handleMicSample(_ sample: MicActivitySample) async {
+        lastMicSample = sample
         switch state.sessionStatus {
         case .idle:
-            guard active else {
-                // Mic released before the confirm window elapsed → it was a brief,
-                // non-meeting blip. Discard it; no session/notification/transcript.
-                // .info (not .debug): this is the only silent no-session path,
-                // and exactly the line needed to field-debug "my call never
-                // started". At most one line per mic release — no spam risk.
-                if pendingStartTicks > 0 {
-                    Log.orchestrator.notice("Mic blip ignored (\(self.pendingStartTicks, privacy: .public)/\(self.requiredStartTicks, privacy: .public) confirm ticks).")
-                }
-                pendingStartTicks = 0
-                // Re-arm the warnings and clear the failure cooldown: the next
-                // sustained-activity episode is a distinct call — it retries
-                // immediately and deserves its own (single) visible error if
-                // still failing (§10.2).
-                didWarnPermission = false
-                didWarnStartFailure = false
-                lastStartFailureAt = nil
-                return
-            }
-            // Mic in use. Require it to stay active for the confirm window before
-            // starting a session, so brief mic use never triggers one (§5.2).
-            // Clamped: while blocked on permissions the counter holds at the
-            // threshold rather than growing unboundedly.
-            pendingStartTicks = min(pendingStartTicks + 1, requiredStartTicks)
-            guard pendingStartTicks >= requiredStartTicks else { return }
-
-            // Confirmed. Refresh permission state — the user may have granted
-            // access since launch. Block session starts until granted (§10.2).
-            // The counter is NOT reset while blocked: the mic is still
-            // continuously active, so a mid-meeting grant starts the session on
-            // the very next poll instead of re-accumulating the confirm window.
-            let snapshot = await permissions.currentStatus()
-            permissionsOK = snapshot.canStartSession
-            if permissionsOK {
-                // Back off after a startup failure: while the mic stays active,
-                // retry at most once per cooldown so a persistently failing
-                // start doesn't churn (and notify) on every confirm window.
-                if let failedAt = lastStartFailureAt {
-                    let sinceMs = now().timeIntervalSince(failedAt) * 1000
-                    if sinceMs < Double(config.startRetryCooldownMs) {
-                        return // counter stays clamped; next poll re-checks
-                    }
-                }
-                pendingStartTicks = 0
-                didWarnPermission = false
-                await beginSession()
-            } else if !didWarnPermission {
-                didWarnPermission = true
-                await presenter.presentError(snapshot.blockingReason ?? "Required permissions are not granted.")
-            }
+            await handleIdleMicSample(sample)
 
         case .recording:
-            if active {
+            if sample.isActive {
                 inactiveMicTicks = 0
             } else {
                 inactiveMicTicks += 1
@@ -254,6 +233,149 @@ public actor SessionOrchestrator {
             // serial loop; ignore detection ticks (§6.3 idempotency).
             break
         }
+    }
+
+    private func handleIdleMicSample(_ sample: MicActivitySample) async {
+        guard sample.isActive else {
+            await resetDetectionEpisode()
+            return
+        }
+        guard !suppressConfirmationUntilMicOff else { return }
+
+        let decision = callStartPolicy.decision(for: sample)
+        let context: DetectedCallContext
+        switch decision {
+        case .inactive:
+            await resetDetectionEpisode()
+            return
+        case let .automatic(value), let .requiresConfirmation(value):
+            context = value
+        }
+
+        // A helper process may change PID during an episode, but the policy's
+        // privacy-safe fingerprint stays stable. A true source/classification
+        // change starts a fresh confirm window and invalidates an old prompt.
+        if pendingStartFingerprint != context.fingerprint {
+            await dismissRecordingPrompt()
+            pendingStartFingerprint = context.fingerprint
+            pendingStartTicks = 0
+        }
+
+        // A visible prompt is emitted once and remains authoritative until the
+        // user acts, the source changes, or the microphone is released.
+        if pendingRecordingPrompt != nil { return }
+
+        pendingStartTicks = min(pendingStartTicks + 1, requiredStartTicks)
+        guard pendingStartTicks >= requiredStartTicks else { return }
+
+        switch decision {
+        case .inactive:
+            return
+        case let .automatic(context):
+            await attemptAutomaticStart(context: context)
+        case let .requiresConfirmation(context):
+            let prompt = RecordingPrompt(context: context)
+            pendingRecordingPrompt = prompt
+            Log.orchestrator.notice(
+                "Recording confirmation requested (source=\(context.kind.rawValue, privacy: .public))."
+            )
+            await presenter.showRecordingPrompt(prompt)
+        }
+    }
+
+    /// Applies the existing permission and startup-failure gates for a trusted
+    /// source. Keeping the confirm counter clamped preserves mid-meeting grants
+    /// and cooldown retries from the previous Bool implementation.
+    private func attemptAutomaticStart(context: DetectedCallContext) async {
+        let snapshot = await permissions.currentStatus()
+        permissionsOK = snapshot.canStartSession
+        if permissionsOK {
+            if let failedAt = lastStartFailureAt {
+                let sinceMs = now().timeIntervalSince(failedAt) * 1000
+                if sinceMs < Double(config.startRetryCooldownMs) {
+                    return
+                }
+            }
+            pendingStartTicks = 0
+            pendingStartFingerprint = nil
+            didWarnPermission = false
+            Log.orchestrator.notice(
+                "Auto-start approved by detection policy (source=\(context.kind.rawValue, privacy: .public))."
+            )
+            await beginSession()
+        } else if !didWarnPermission {
+            didWarnPermission = true
+            await presenter.presentError(snapshot.blockingReason ?? "Required permissions are not granted.")
+        }
+    }
+
+    private func handleRecordingPromptAccepted(_ id: UUID) async {
+        guard state.sessionStatus == .idle,
+              let prompt = pendingRecordingPrompt,
+              prompt.id == id,
+              lastMicSample.isActive
+        else {
+            Log.orchestrator.notice("Ignoring stale recording-prompt acceptance.")
+            return
+        }
+
+        await dismissRecordingPrompt()
+        pendingStartTicks = 0
+        pendingStartFingerprint = nil
+        suppressConfirmationUntilMicOff = true
+        Log.orchestrator.notice(
+            "Recording confirmation accepted (source=\(prompt.context.kind.rawValue, privacy: .public))."
+        )
+
+        let snapshot = await permissions.currentStatus()
+        permissionsOK = snapshot.canStartSession
+        if permissionsOK {
+            didWarnPermission = false
+            await beginSession()
+        } else if !didWarnPermission {
+            didWarnPermission = true
+            await presenter.presentError(snapshot.blockingReason ?? "Required permissions are not granted.")
+        }
+    }
+
+    private func handleRecordingPromptDeclined(_ id: UUID) async {
+        guard state.sessionStatus == .idle,
+              let prompt = pendingRecordingPrompt,
+              prompt.id == id
+        else {
+            Log.orchestrator.notice("Ignoring stale recording-prompt decline.")
+            return
+        }
+        await dismissRecordingPrompt()
+        pendingStartTicks = 0
+        pendingStartFingerprint = nil
+        suppressConfirmationUntilMicOff = true
+        Log.orchestrator.notice(
+            "Recording confirmation declined (source=\(prompt.context.kind.rawValue, privacy: .public)); suppressed until mic-off."
+        )
+    }
+
+    private func dismissRecordingPrompt() async {
+        guard let prompt = pendingRecordingPrompt else { return }
+        pendingRecordingPrompt = nil
+        await presenter.hideRecordingPrompt(id: prompt.id)
+    }
+
+    private func resetDetectionEpisode() async {
+        if pendingStartTicks > 0 && pendingRecordingPrompt == nil {
+            Log.orchestrator.notice(
+                "Mic blip ignored (\(self.pendingStartTicks, privacy: .public)/\(self.requiredStartTicks, privacy: .public) confirm ticks)."
+            )
+        }
+        await dismissRecordingPrompt()
+        pendingStartTicks = 0
+        pendingStartFingerprint = nil
+        suppressConfirmationUntilMicOff = false
+        // Re-arm the warnings and clear the failure cooldown: the next sustained
+        // activity episode is a distinct call.
+        didWarnPermission = false
+        didWarnStartFailure = false
+        lastStartFailureAt = nil
     }
 
     // MARK: Session start (§5.2, §14.2)
@@ -283,8 +405,8 @@ public actor SessionOrchestrator {
             language: config.language,
             sampleRate: config.sampleRate,
             windowSeconds: config.transcriptionWindowSeconds,
-            model: selectedEngine.whisperModel.isEmpty ? config.whisperModel : selectedEngine.whisperModel,
-            modelFolder: selectedEngine.whisperModelFolder
+            model: selectedEngine.model.isEmpty ? config.whisperModel : selectedEngine.model,
+            modelFolder: selectedEngine.modelFolder
         )
         do {
             try await engine.start(engineConfig)

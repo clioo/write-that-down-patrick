@@ -1,11 +1,13 @@
 import Foundation
 
 /// Selects which transcription engine implementation is used (§11, §8.2).
-/// Engine selection is purely runtime configuration — adding/selecting an engine
-/// requires no changes outside its own implementation and the factory.
+/// Engine selection is runtime configuration; concrete construction remains
+/// isolated in the executable target's engine factory.
 public enum EngineKind: String, Sendable, CaseIterable {
     /// Portable, open-source, fully-offline, multilingual default (WhisperKit).
     case `default`
+    /// Downloadable ONNX speech models powered by sherpa-onnx.
+    case sherpa
     /// Optional native on-device engine (SFSpeechRecognizer).
     case native
 }
@@ -100,6 +102,9 @@ public struct AppConfiguration: Sendable, Equatable {
     /// audio is never transmitted — see README "Offline & privacy").
     public var whisperModelFolder: URL?
 
+    /// Catalog model selected when `engine == .sherpa`.
+    public var speechModel: String
+
     public init(
         outputDir: URL,
         language: String,
@@ -115,7 +120,8 @@ public struct AppConfiguration: Sendable, Equatable {
         startRetryCooldownMs: Int = 60_000,
         excludedBundleIDs: [String] = AppConfiguration.defaultExcludedBundleIDs,
         whisperModel: String = "base",
-        whisperModelFolder: URL? = nil
+        whisperModelFolder: URL? = nil,
+        speechModel: String = SpeechModelCatalog.parakeetTDTv3ID
     ) {
         self.outputDir = outputDir
         self.language = language
@@ -132,6 +138,7 @@ public struct AppConfiguration: Sendable, Equatable {
         self.excludedBundleIDs = excludedBundleIDs
         self.whisperModel = whisperModel
         self.whisperModelFolder = whisperModelFolder
+        self.speechModel = speechModel
     }
 
     // MARK: Defaults
@@ -157,6 +164,9 @@ public struct AppConfiguration: Sendable, Equatable {
         }
         if language.trimmingCharacters(in: .whitespaces).isEmpty {
             throw ConfigurationError.emptyLanguage
+        }
+        if engine == .sherpa && speechModel.trimmingCharacters(in: .whitespaces).isEmpty {
+            throw ConfigurationError.emptySpeechModel
         }
         if inactivityTimeoutMs <= 0 {
             throw ConfigurationError.nonPositive(field: "inactivity_timeout_ms", value: inactivityTimeoutMs)

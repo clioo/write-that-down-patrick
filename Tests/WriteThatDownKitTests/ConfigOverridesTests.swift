@@ -18,7 +18,8 @@ final class ConfigOverridesTests: XCTestCase {
           "pollIntervalMs": 1000,
           "startConfirmMs": 5000,
           "whisperModel": "small",
-          "whisperModelFolder": "~/Models/small"
+          "whisperModelFolder": "~/Models/small",
+          "speechModel": "parakeet-tdt-0.6b-v3-int8"
         }
         """
         let o = try ConfigOverrides.decode(fromJSON: Data(json.utf8))
@@ -30,6 +31,7 @@ final class ConfigOverridesTests: XCTestCase {
         XCTAssertEqual(o.startConfirmMs, 5_000)
         XCTAssertEqual(o.whisperModel, "small")
         XCTAssertEqual(o.whisperModelFolder, "~/Models/small")
+        XCTAssertEqual(o.speechModel, "parakeet-tdt-0.6b-v3-int8")
     }
 
     func testDecodePartialFileLeavesOtherKeysNil() throws {
@@ -60,6 +62,7 @@ final class ConfigOverridesTests: XCTestCase {
             "WTD_START_CONFIRM_MS": "2500",
             "WTD_WHISPER_MODEL": "tiny",
             "WTD_WHISPER_MODEL_FOLDER": "~/Models/tiny",
+            "WTD_SPEECH_MODEL": "parakeet-tdt-0.6b-v3-int8",
         ]
         let (o, warnings) = ConfigOverrides.fromEnvironment(env)
         XCTAssertTrue(warnings.isEmpty)
@@ -71,6 +74,7 @@ final class ConfigOverridesTests: XCTestCase {
         XCTAssertEqual(o.startConfirmMs, 2_500)
         XCTAssertEqual(o.whisperModel, "tiny")
         XCTAssertEqual(o.whisperModelFolder, "~/Models/tiny")
+        XCTAssertEqual(o.speechModel, "parakeet-tdt-0.6b-v3-int8")
     }
 
     func testFromEnvironmentWarnsOnUnparsableInteger() {
@@ -98,7 +102,8 @@ final class ConfigOverridesTests: XCTestCase {
             pollIntervalMs: 1_000,
             startConfirmMs: 5_000,
             whisperModel: "small",
-            whisperModelFolder: "~/Models/small"
+            whisperModelFolder: "~/Models/small",
+            speechModel: "parakeet-tdt-0.6b-v3-int8"
         )
         let (c, warnings) = base.applying(o)
         XCTAssertTrue(warnings.isEmpty)
@@ -112,6 +117,7 @@ final class ConfigOverridesTests: XCTestCase {
         XCTAssertEqual(c.whisperModel, "small")
         XCTAssertEqual(c.whisperModelFolder?.path.hasSuffix("/Models/small"), true)
         XCTAssertEqual(c.whisperModelFolder?.path.contains("~"), false)
+        XCTAssertEqual(c.speechModel, "parakeet-tdt-0.6b-v3-int8")
     }
 
     func testApplyingEmptyOverridesChangesNothing() {
@@ -133,7 +139,7 @@ final class ConfigOverridesTests: XCTestCase {
         XCTAssertEqual(c.engine, base.engine, "unknown engine string keeps the current engine")
         XCTAssertEqual(warnings.count, 1)
         XCTAssertTrue(warnings[0].contains("whisperkit"), "warning names the bad value")
-        XCTAssertTrue(warnings[0].contains("default") && warnings[0].contains("native"),
+        XCTAssertTrue(warnings[0].contains("default") && warnings[0].contains("sherpa") && warnings[0].contains("native"),
                       "warning lists the valid values")
     }
 

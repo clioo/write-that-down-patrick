@@ -7,7 +7,7 @@ import Foundation
 /// test can drive mic-active/inactive ticks deterministically.
 final class MockMicSignalSource: MicSignalSource, @unchecked Sendable {
     private let lock = NSLock()
-    private var handler: (@Sendable (Bool) -> Void)?
+    private var handler: (@Sendable (MicActivitySample) -> Void)?
     private(set) var stopped = false
 
     var isStarted: Bool {
@@ -15,7 +15,7 @@ final class MockMicSignalSource: MicSignalSource, @unchecked Sendable {
         return handler != nil
     }
 
-    func start(onSample: @escaping @Sendable (Bool) -> Void) {
+    func start(onSample: @escaping @Sendable (MicActivitySample) -> Void) {
         lock.lock(); handler = onSample; lock.unlock()
     }
 
@@ -25,7 +25,14 @@ final class MockMicSignalSource: MicSignalSource, @unchecked Sendable {
 
     func emit(_ active: Bool) {
         lock.lock(); let h = handler; lock.unlock()
-        h?(active)
+        // Existing state-machine tests intentionally retain the former Bool
+        // behavior: true is a trusted automatic call signal.
+        h?(.legacy(active: active))
+    }
+
+    func emit(_ sample: MicActivitySample) {
+        lock.lock(); let h = handler; lock.unlock()
+        h?(sample)
     }
 }
 
@@ -180,6 +187,8 @@ final class MockPresenter: Presenting {
     private(set) var captionsHidden = false
     private(set) var notifiedStart = 0
     private(set) var transcriptPaths: [String?] = []
+    private(set) var recordingPrompts: [RecordingPrompt] = []
+    private(set) var hiddenRecordingPromptIDs: [UUID] = []
 
     func sessionWillStart(session: RecordingSession) {}
     func updateTranscriptPath(_ path: String?) { transcriptPaths.append(path) }
@@ -189,6 +198,8 @@ final class MockPresenter: Presenting {
     func commitFinal(_ segment: Segment) { finals.append(segment) }
     func updateStatus(_ status: SessionStatus, endReason: EndReason?) { statusUpdates.append((status, endReason)) }
     func notifyCallStarted(session: RecordingSession) { notifiedStart += 1 }
+    func showRecordingPrompt(_ prompt: RecordingPrompt) { recordingPrompts.append(prompt) }
+    func hideRecordingPrompt(id: UUID) { hiddenRecordingPromptIDs.append(id) }
     func presentError(_ message: String) { errors.append(message) }
 
     var lastStatus: SessionStatus? { statusUpdates.last?.0 }

@@ -27,10 +27,24 @@ public protocol Presenting: AnyObject, Sendable {
     /// Trigger the "call detected and started" notification (§5.2, §16.1).
     func notifyCallStarted(session: RecordingSession)
 
+    /// Present a non-blocking confirmation for an ambiguous microphone source.
+    /// No capture, engine, writer, or transcript exists while this is visible.
+    func showRecordingPrompt(_ prompt: RecordingPrompt)
+
+    /// Remove a prompt because it was handled, became stale, or mic input ended.
+    func hideRecordingPrompt(id: UUID)
+
     /// The transcript document was created or renamed; `path` is its current
     /// absolute location (provisional during recording, final after save).
     func updateTranscriptPath(_ path: String?)
 
     /// Surface a visible error to the user (§10.2 — never fail silently).
     func presentError(_ message: String)
+}
+
+/// Compatibility defaults keep presentation surfaces source-compatible while a
+/// concrete Granola-style prompt UI is wired independently.
+public extension Presenting {
+    func showRecordingPrompt(_ prompt: RecordingPrompt) {}
+    func hideRecordingPrompt(id: UUID) {}
 }

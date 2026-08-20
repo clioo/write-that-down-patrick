@@ -31,6 +31,9 @@ let package = Package(
         // multilingual, Metal/ANE accelerated. Isolated to the executable target.
         // Pinned to the 0.18.x API the WhisperKitEngine is written against.
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", .upToNextMinor(from: "0.18.0")),
+        // Native macOS ONNX runtime used by downloadable Parakeet models.
+        // Exact pin keeps the binary XCFramework checksums reproducible.
+        .package(url: "https://github.com/k2-fsa/sherpa-onnx.git", exact: "1.13.6"),
     ],
     targets: [
         // Core library — system frameworks only, no external dependencies.
@@ -40,13 +43,14 @@ let package = Package(
             dependencies: [],
             path: "Sources/WriteThatDownKit"
         ),
-        // Executable — wires everything together and provides the default
-        // WhisperKit engine. This is the ONLY target that links WhisperKit.
+        // Executable — wires everything together and contains concrete engine
+        // adapters. This is the only target that links external inference SDKs.
         .executableTarget(
             name: "WriteThatDown",
             dependencies: [
                 "WriteThatDownKit",
                 .product(name: "WhisperKit", package: "WhisperKit"),
+                .product(name: "sherpa-onnx", package: "sherpa-onnx"),
             ],
             path: "Sources/WriteThatDown",
             linkerSettings: [

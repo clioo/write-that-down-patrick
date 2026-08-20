@@ -17,18 +17,32 @@ final class AppEnvironment {
     private let orchestrator: SessionOrchestrator
     private let availableEngineOptions: [TranscriptionEngineOption]
     private let engineSelectionStore: EngineSelectionStore
+    private let modelStore: SpeechModelStore
+    private let initialModelInstallStates: [String: ModelInstallState]
+    private var modelDownloadTasks: [String: Task<Void, Never>] = [:]
 
     init() throws {
         // Validate configuration BEFORE any operation starts (§11).
         self.config = try AppEnvironment.loadConfiguration().validated()
-        let discoveredOptions = AppEnvironment.availableTranscriptionOptions(for: config)
+        let modelStore = try SpeechModelStore()
+        let discoveredOptions = AppEnvironment.availableTranscriptionOptions(
+            for: config,
+            modelStore: modelStore
+        )
+        let installStates = AppEnvironment.modelInstallStates(
+            for: discoveredOptions,
+            modelStore: modelStore
+        )
         let selectedOption = AppEnvironment.initialSelectedOption(
             configured: TranscriptionEngineOption.from(config),
-            available: discoveredOptions
+            available: discoveredOptions,
+            installStates: installStates
         )
         let selectionStore = EngineSelectionStore(selected: selectedOption)
         self.availableEngineOptions = discoveredOptions
         self.engineSelectionStore = selectionStore
+        self.modelStore = modelStore
+        self.initialModelInstallStates = installStates
 
         // Ensure the base output directory exists (date folders are created
         // per-session by the writer, §9.2).
@@ -67,11 +81,23 @@ final class AppEnvironment {
         // a permission prompt is stalled unanswered.
         let orchestrator = self.orchestrator
         presenter.onManualStop = { orchestrator.requestManualStop() }
+        presenter.onAcceptRecordingPrompt = { id in orchestrator.acceptRecordingPrompt(id) }
+        presenter.onDeclineRecordingPrompt = { id in orchestrator.declineRecordingPrompt(id) }
         presenter.onQuit = { orchestrator.requestShutdown() }
         presenter.onSelectEngineOption = { [weak self] id in
             Task { await self?.selectEngineOption(id) }
         }
-        presenter.setEngineOptions(availableEngineOptions, selectedID: engineSelectionStore.current.id)
+        presenter.onDownloadEngineOption = { [weak self] id in
+            self?.downloadEngineOption(id)
+        }
+        presenter.onDeleteEngineOption = { [weak self] id in
+            self?.deleteEngineOption(id)
+        }
+        presenter.setEngineOptions(
+            availableEngineOptions,
+            selectedID: engineSelectionStore.current.id,
+            installStates: initialModelInstallStates
+        )
         if availableEngineOptions.isEmpty {
             presenter.updateSelectedEngineOption(engineSelectionStore.current, resetHealth: false)
         }
@@ -97,6 +123,14 @@ final class AppEnvironment {
             Log.app.error("Ignoring unavailable transcription option id=\(id, privacy: .public).")
             return
         }
+        if option.isDownloadable {
+            guard let manifest = SpeechModelCatalog.model(id: option.model),
+                  modelStore.installState(for: manifest).isReady
+            else {
+                Log.app.error("Ignoring selection of model that is not installed: \(option.title, privacy: .public).")
+                return
+            }
+        }
 
         engineSelectionStore.current = option
         presenter.updateSelectedEngineOption(option)
@@ -109,6 +143,58 @@ final class AppEnvironment {
 
         if option.engine == .native {
             _ = await permissions.requestAll()
+        }
+    }
+
+    private func downloadEngineOption(_ id: String) {
+        guard modelDownloadTasks[id] == nil,
+              let option = availableEngineOptions.first(where: { $0.id == id }),
+              option.isDownloadable,
+              let manifest = SpeechModelCatalog.model(id: option.model)
+        else { return }
+
+        presenter.updateModelInstallState(id: id, state: .downloading(progress: 0))
+        let modelStore = self.modelStore
+        let presenter = self.presenter
+        let task = Task { [weak self] in
+            do {
+                _ = try await modelStore.download(manifest) { progress in
+                    Task { @MainActor in
+                        presenter.updateModelInstallState(
+                            id: id,
+                            state: .downloading(progress: progress)
+                        )
+                    }
+                }
+                try Task.checkCancellation()
+                presenter.updateModelInstallState(id: id, state: .ready)
+                Log.app.notice("Downloaded speech model \(manifest.title, privacy: .public).")
+            } catch is CancellationError {
+                presenter.updateModelInstallState(id: id, state: .notDownloaded)
+            } catch {
+                presenter.updateModelInstallState(id: id, state: .failed(error.localizedDescription))
+                Log.app.error("Failed to download speech model \(manifest.title, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+            self?.modelDownloadTasks[id] = nil
+        }
+        modelDownloadTasks[id] = task
+    }
+
+    private func deleteEngineOption(_ id: String) {
+        guard engineSelectionStore.current.id != id,
+              modelDownloadTasks[id] == nil,
+              let option = availableEngineOptions.first(where: { $0.id == id }),
+              option.isDownloadable,
+              let manifest = SpeechModelCatalog.model(id: option.model)
+        else { return }
+
+        do {
+            try modelStore.delete(manifest)
+            presenter.updateModelInstallState(id: id, state: .notDownloaded)
+            Log.app.notice("Deleted speech model \(manifest.title, privacy: .public).")
+        } catch {
+            presenter.updateModelInstallState(id: id, state: .failed(error.localizedDescription))
+            Log.app.error("Failed to delete speech model \(manifest.title, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -160,6 +246,19 @@ final class AppEnvironment {
         switch option.engine {
         case .native:
             return option.detail
+        case .sherpa:
+            guard let manifest = SpeechModelCatalog.model(id: option.model) else {
+                return "Unknown catalog model"
+            }
+            let ready = manifest.files.allSatisfy { file in
+                guard let folder = option.modelFolder else { return false }
+                let url = folder.appendingPathComponent(file.name)
+                guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+                      let size = values.fileSize
+                else { return false }
+                return size == Int(file.sizeBytes)
+            }
+            return ready ? "On disk · loads offline" : "Download required"
         case .default:
             if let folder = option.whisperModelFolder {
                 return weightsStatus(at: folder) ?? "⚠️ Configured folder not found: \(folder.path)"
@@ -169,7 +268,10 @@ final class AppEnvironment {
         }
     }
 
-    static func availableTranscriptionOptions(for config: AppConfiguration) -> [TranscriptionEngineOption] {
+    static func availableTranscriptionOptions(
+        for config: AppConfiguration,
+        modelStore: SpeechModelStore
+    ) -> [TranscriptionEngineOption] {
         var options: [TranscriptionEngineOption] = []
         var seen: Set<String> = []
 
@@ -188,7 +290,8 @@ final class AppEnvironment {
                 title: TranscriptionEngineOption.whisperTitle(for: model),
                 detail: detail,
                 whisperModel: model,
-                whisperModelFolder: folder
+                whisperModelFolder: folder,
+                summary: "General-purpose multilingual transcription powered by WhisperKit."
             ))
         }
 
@@ -207,13 +310,40 @@ final class AppEnvironment {
             }
         }
 
+        // Keep the configured Whisper model selectable even before its one-time
+        // WhisperKit download, preserving the existing first-call behavior.
+        if !options.contains(where: {
+            $0.engine == .default && $0.whisperModel == config.whisperModel
+        }) {
+            let folder = config.whisperModelFolder
+            add(TranscriptionEngineOption(
+                id: TranscriptionEngineOption.whisperID(model: config.whisperModel, folder: folder),
+                engine: .default,
+                title: TranscriptionEngineOption.whisperTitle(for: config.whisperModel),
+                detail: folder?.path ?? "Downloads once on first use",
+                whisperModel: config.whisperModel,
+                whisperModelFolder: folder,
+                summary: "General-purpose multilingual transcription powered by WhisperKit."
+            ))
+        }
+
+        for manifest in SpeechModelCatalog.all {
+            add(TranscriptionEngineOption.from(
+                manifest,
+                modelFolder: modelStore.modelDirectory(for: manifest)
+            ))
+        }
+
         if let native = nativeEngineOption(for: config.language) {
             add(native)
         }
 
         return options.sorted { lhs, rhs in
+            if lhs.isRecommended != rhs.isRecommended {
+                return lhs.isRecommended
+            }
             if lhs.engine != rhs.engine {
-                return lhs.engine == .default
+                return engineSortRank(lhs.engine) < engineSortRank(rhs.engine)
             }
             if lhs.engine == .native {
                 return lhs.title < rhs.title
@@ -227,24 +357,42 @@ final class AppEnvironment {
 
     static func initialSelectedOption(
         configured: TranscriptionEngineOption,
-        available: [TranscriptionEngineOption]
+        available: [TranscriptionEngineOption],
+        installStates: [String: ModelInstallState]
     ) -> TranscriptionEngineOption {
-        if let exact = available.first(where: { $0.id == configured.id }) {
+        func isReady(_ option: TranscriptionEngineOption) -> Bool {
+            installStates[option.id]?.isReady ?? true
+        }
+
+        if let exact = available.first(where: { $0.id == configured.id && isReady($0) }) {
             return exact
         }
         if configured.engine == .default,
            let sameModel = available.first(where: {
-               $0.engine == .default && $0.whisperModel == configured.whisperModel
+               $0.engine == .default && $0.whisperModel == configured.whisperModel && isReady($0)
            }) {
             return sameModel
         }
-        if let sameEngine = available.first(where: { $0.engine == configured.engine }) {
+        if let sameEngine = available.first(where: { $0.engine == configured.engine && isReady($0) }) {
             return sameEngine
         }
-        if let firstWhisper = available.first(where: { $0.engine == .default }) {
+        if let firstWhisper = available.first(where: { $0.engine == .default && isReady($0) }) {
             return firstWhisper
         }
-        return available.first ?? configured
+        return available.first(where: isReady) ?? configured
+    }
+
+    static func modelInstallStates(
+        for options: [TranscriptionEngineOption],
+        modelStore: SpeechModelStore
+    ) -> [String: ModelInstallState] {
+        Dictionary(uniqueKeysWithValues: options.map { option in
+            if option.isDownloadable,
+               let manifest = SpeechModelCatalog.model(id: option.model) {
+                return (option.id, modelStore.installState(for: manifest))
+            }
+            return (option.id, .ready)
+        })
     }
 
     static var whisperCacheRoot: URL {
@@ -304,7 +452,8 @@ final class AppEnvironment {
             id: "native:\(identifier)",
             engine: .native,
             title: "Apple Speech",
-            detail: "Built into macOS · \(identifier)"
+            detail: "Built into macOS · \(identifier)",
+            summary: "Uses Apple's on-device dictation model for \(identifier)."
         )
     }
 
@@ -320,6 +469,14 @@ final class AppEnvironment {
         if lower.contains("medium") { return 3 }
         if lower.contains("large") { return 4 }
         return 10
+    }
+
+    private static func engineSortRank(_ engine: EngineKind) -> Int {
+        switch engine {
+        case .sherpa: return 0
+        case .default: return 1
+        case .native: return 2
+        }
     }
 
     private static func persistEngineSelection(_ option: TranscriptionEngineOption) throws {
@@ -339,6 +496,8 @@ final class AppEnvironment {
             } else {
                 object.removeValue(forKey: "whisperModelFolder")
             }
+        } else if option.engine == .sherpa {
+            object["speechModel"] = option.model
         }
 
         try FileManager.default.createDirectory(

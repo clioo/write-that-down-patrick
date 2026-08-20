@@ -1,5 +1,7 @@
 import Foundation
 import CoreAudio
+import AppKit
+import CoreGraphics
 
 /// Concrete `MicSignalSource` (§3.1.1, §5.1). Polls CoreAudio on a fixed
 /// cadence (`poll_interval_ms`) for "is a microphone in use".
@@ -20,7 +22,7 @@ public final class CallDetector: MicSignalSource, @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.writethatdown.calldetector")
     private var timer: DispatchSourceTimer?
-    private var onSample: (@Sendable (Bool) -> Void)?
+    private var onSample: (@Sendable (MicActivitySample) -> Void)?
     /// Last observed app sets, for change-only logging.
     private var lastActiveApps: Set<String> = []
     private var lastIgnoredApps: Set<String> = []
@@ -30,7 +32,7 @@ public final class CallDetector: MicSignalSource, @unchecked Sendable {
         self.excludedBundleIDs = Set(excludedBundleIDs.map { $0.lowercased() })
     }
 
-    public func start(onSample: @escaping @Sendable (Bool) -> Void) {
+    public func start(onSample: @escaping @Sendable (MicActivitySample) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
             self.onSample = onSample
@@ -59,9 +61,11 @@ public final class CallDetector: MicSignalSource, @unchecked Sendable {
 
     // MARK: - Polling (runs on `queue`)
 
-    private func pollMicrophone() -> Bool {
+    private func pollMicrophone() -> MicActivitySample {
         if #available(macOS 14.0, *) {
-            let (active, ignored) = Self.capturingApps(excluding: excludedBundleIDs, ownPID: ownPID)
+            let sample = Self.activitySample(excluding: excludedBundleIDs, ownPID: ownPID)
+            let active = Set(sample.sources.map(Self.logLabel))
+            let ignored = Set(sample.ignoredSources.map(Self.logLabel))
             // Log only when the picture changes — one line per transition.
             if active != lastActiveApps || ignored != lastIgnoredApps {
                 if !active.isEmpty {
@@ -76,10 +80,10 @@ public final class CallDetector: MicSignalSource, @unchecked Sendable {
                 lastActiveApps = active
                 lastIgnoredApps = ignored
             }
-            return !active.isEmpty
+            return sample
         }
         // macOS 13 fallback: no attribution available.
-        return Self.anyInputDeviceRunning()
+        return .unattributed(active: Self.anyInputDeviceRunning())
     }
 
     // MARK: - macOS 14+: per-process attribution
@@ -90,21 +94,111 @@ public final class CallDetector: MicSignalSource, @unchecked Sendable {
     /// active (an unknown recorder is more likely a call than a terminal).
     @available(macOS 14.0, *)
     public static func capturingApps(excluding excluded: Set<String>, ownPID: pid_t) -> (active: Set<String>, ignored: Set<String>) {
-        var active: Set<String> = []
-        var ignored: Set<String> = []
+        let sample = activitySample(excluding: excluded, ownPID: ownPID)
+        return (
+            Set(sample.sources.map(logLabel)),
+            Set(sample.ignoredSources.map(logLabel))
+        )
+    }
+
+    /// Rich per-process sample used by the source-classification policy. The
+    /// configured exclusion list retains its existing case-insensitive semantics
+    /// and matches either the raw helper bundle or normalized top-level app.
+    @available(macOS 14.0, *)
+    public static func activitySample(excluding excluded: Set<String>, ownPID: pid_t) -> MicActivitySample {
+        let loweredExcluded = Set(excluded.map { $0.lowercased() })
+        var active: [MicActivitySource] = []
+        var ignored: [MicActivitySource] = []
         for object in processObjects() {
             guard processBool(object, selector: kAudioProcessPropertyIsRunningInput) else { continue }
             let pid = processPID(object)
             if pid == ownPID { continue }
-            let bundle = processBundleID(object)
-            let label = bundle.isEmpty ? "pid:\(pid)" : bundle
-            if excluded.contains(bundle.lowercased()) && !bundle.isEmpty {
-                ignored.insert(label)
+            let rawBundle = processBundleID(object)
+            let rawBundleID = rawBundle.isEmpty ? nil : rawBundle
+            let applicationBundleID = normalizedApplicationBundleID(rawBundleID)
+            let app = runningApplication(for: applicationBundleID, fallbackPID: pid)
+            let source = MicActivitySource(
+                pid: pid,
+                bundleID: rawBundleID,
+                applicationBundleID: applicationBundleID,
+                displayName: app?.localizedName,
+                windowTitle: app.flatMap { frontmostWindowTitle(for: $0.processIdentifier) }
+            )
+            let identifiers = [rawBundleID, applicationBundleID]
+                .compactMap { $0?.lowercased() }
+            if identifiers.contains(where: loweredExcluded.contains) {
+                ignored.append(source)
             } else {
-                active.insert(label)
+                active.append(source)
             }
         }
-        return (active, ignored)
+        active.sort(by: sourceOrder)
+        ignored.sort(by: sourceOrder)
+        return MicActivitySample(
+            isActive: !active.isEmpty,
+            attribution: .attributed,
+            sources: active,
+            ignoredSources: ignored
+        )
+    }
+
+    private static func logLabel(_ source: MicActivitySource) -> String {
+        source.bundleID ?? source.applicationBundleID ?? "pid:\(source.pid)"
+    }
+
+    private static func sourceOrder(_ lhs: MicActivitySource, _ rhs: MicActivitySource) -> Bool {
+        logLabel(lhs).localizedCaseInsensitiveCompare(logLabel(rhs)) == .orderedAscending
+    }
+
+    /// Chromium and similar apps attribute capture to nested helper bundles.
+    /// Normalize only well-known families; an unknown helper remains unknown and
+    /// therefore requires confirmation rather than being auto-recorded.
+    private static func normalizedApplicationBundleID(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let id = raw.lowercased()
+        if id == "us.zoom.xos" || id.hasPrefix("us.zoom.xos.") { return "us.zoom.xos" }
+        if id == "com.microsoft.teams2" || id.hasPrefix("com.microsoft.teams2.") { return "com.microsoft.teams2" }
+        if id == "com.microsoft.teams" || id.hasPrefix("com.microsoft.teams.") { return "com.microsoft.teams" }
+        if id == "com.google.chrome" || id.hasPrefix("com.google.chrome.") { return "com.google.Chrome" }
+        if id == "com.brave.browser" || id.hasPrefix("com.brave.browser.") { return "com.brave.Browser" }
+        if id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.") { return "com.microsoft.edgemac" }
+        if id == "org.mozilla.firefox" || id.hasPrefix("org.mozilla.firefox.") { return "org.mozilla.firefox" }
+        if id == "company.thebrowser.browser" || id.hasPrefix("company.thebrowser.browser.") { return "company.thebrowser.Browser" }
+        if id == "com.apple.safari" || id.hasPrefix("com.apple.safari.") { return "com.apple.Safari" }
+        return raw
+    }
+
+    private static func runningApplication(
+        for bundleID: String?,
+        fallbackPID: pid_t
+    ) -> NSRunningApplication? {
+        if let bundleID,
+           let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
+            return app
+        }
+        return NSRunningApplication(processIdentifier: fallbackPID)
+    }
+
+    /// Returns only the foremost on-screen window title for an app. Browser
+    /// background tabs are deliberately not guessed: without a browser extension
+    /// macOS exposes microphone ownership only at process level.
+    private static func frontmostWindowTitle(for pid: pid_t) -> String? {
+        guard let info = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            CGWindowID(kCGNullWindowID)
+        ) as? [[String: Any]] else { return nil }
+
+        for window in info {
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? NSNumber,
+                  ownerPID.int32Value == pid,
+                  let layer = window[kCGWindowLayer as String] as? NSNumber,
+                  layer.intValue == 0,
+                  let rawTitle = window[kCGWindowName as String] as? String
+            else { continue }
+            let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty { return title }
+        }
+        return nil
     }
 
     @available(macOS 14.0, *)

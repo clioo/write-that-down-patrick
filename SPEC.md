@@ -1,8 +1,11 @@
-# Call Transcription Service Specification
+# Write That Down Specification
 
-Status: Draft v1 (implementation-agnostic)
+Status: Draft v2 (source-aware detection and conversation assistant)
 
-Purpose: Define a macOS application that automatically detects calls, transcribes their audio in real time and locally, displays live captions, and organizes the resulting transcripts on the filesystem.
+Purpose: Define a macOS application that detects likely meetings, transcribes
+their audio in real time and locally, displays a live conversation workspace,
+supports questions over the conversation through OpenCode Go, produces an
+end-of-conversation summary, and organizes transcripts on the filesystem.
 
 ## Normative Language
 
@@ -14,28 +17,38 @@ The key words `MUST`, `MUST NOT`, `REQUIRED`, `SHOULD`, `SHOULD NOT`, `RECOMMEND
 
 The service is a long-running local application that continuously observes the system audio state, detects when the user enters a call, captures that call's audio, transcribes it in real time, and persists the transcript as a structured document on the filesystem.
 
-The service solves four operational problems:
+The service solves five operational problems:
 
-- It turns call transcription into an automatic flow instead of a manual per-meeting action.
+- It starts obvious meetings automatically while asking before recording
+  ambiguous microphone activity.
 - It processes audio locally, without sending data to the cloud.
 - It keeps transcripts as readable, version-controllable files, organized predictably.
 - It provides visible feedback to the user (live captions, status, notifications) without requiring the user to supervise the process.
+- It lets the user ask about the current conversation and receive a summary
+  without copying a transcript path into another application.
 
 Important boundary:
 
-- The service is a capturer, transcriber, and organizer.
-- The service does NOT perform questions and answers (Q&A) over transcripts.
-- AI analysis is performed by external tools that the user points at the transcript folder.
-- A successful session ends with a persisted transcript document, not with an analysis.
+- Audio capture and speech transcription remain local.
+- Only transcript text and assistant conversation text cross the device boundary,
+  and only through the `opencode-go` provider.
+- The Pi runtime invoked by the application is a minimal model-protocol adapter. It has no coding,
+  shell, or filesystem tools and never receives a transcript path.
+- Transcript persistence is independent from assistant availability. An
+  assistant or summary failure MUST NOT turn a successfully persisted recording
+  into a failed recording session.
 
 ## 2. Goals and Non-Goals
 
 ### 2.1 Goals
 
 - Observe the system audio state on a fixed cadence and detect the start and end of calls.
+- Distinguish recognized meeting sources from ambiguous microphone activity.
 - Simultaneously capture system audio and microphone audio.
 - Transcribe captured audio in real time using a swappable transcription engine.
-- Display live captions during the call.
+- Display a live transcript and conversation workspace during the call.
+- Support in-session Q&A and generate a summary after finalization using
+  OpenCode Go models.
 - Expose operational status to the user (menu bar and notifications).
 - Persist transcripts in Markdown organized by date.
 - Stop recording automatically after sustained audio inactivity.
@@ -43,10 +56,11 @@ Important boundary:
 
 ### 2.2 Non-Goals
 
-- Q&A, chat, or integrated AI analysis inside the application.
-- Authentication against AI providers or use of subscriptions.
+- Supporting AI providers other than `opencode-go` in v2.
+- Giving the assistant shell, filesystem, code-editing, or autonomous agent tools.
+- Uploading captured audio to any AI provider.
 - Search or correlation across multiple transcripts.
-- Speaker identification (diarization) in v1.
+- Speaker identification (diarization) in v2.
 - Support for operating systems other than macOS.
 - Prescribing a specific transcription engine.
 
@@ -57,8 +71,10 @@ Important boundary:
 1. `Call Detector`
 
   - Observes the operating system's microphone-in-use signal.
-  - Decides when a session must start or end.
-  - Emits transition events to the orchestrator.
+  - Attributes activity to an application when the operating system exposes that
+    information and classifies the source as automatic, confirmation-required,
+    or excluded.
+  - Emits source-aware transition events to the orchestrator.
 
 2. `Audio Capturer`
 
@@ -96,6 +112,19 @@ Important boundary:
   - Exposes typed configuration values with defaults.
   - Validates configuration before operation starts.
 
+9. `Conversation Assistant`
+
+  - Accepts the current transcript text and in-session questions.
+  - Uses a minimal, request-scoped Pi runtime with no tools.
+  - Routes every model request exclusively through `opencode-go`.
+  - Generates the final summary after transcript finalization.
+
+10. `Credential Store`
+
+  - Stores and retrieves the OpenCode Go API key from the macOS Keychain.
+  - Never exposes the key in transcript files, application configuration,
+    process arguments, or logs.
+
 ### 3.2 Abstraction Levels
 
 The service is easiest to port and maintain when kept in these layers:
@@ -124,6 +153,11 @@ The service is easiest to port and maintain when kept in these layers:
 
   - Document writing, folder structure, and naming.
 
+7. `Assistant Layer`
+
+  - Request-scoped transcript context, chat history, summary generation, and the
+    OpenCode Go provider boundary.
+
 ### 3.3 External Dependencies
 
 - Operating system audio capture API.
@@ -132,6 +166,10 @@ The service is easiest to port and maintain when kept in these layers:
 - Local filesystem for transcripts.
 - Operating system notification system.
 - Operating system permissions for microphone and audio capture.
+- macOS Keychain for the OpenCode Go API key.
+- OpenCode Go network access for chat and summary requests.
+- A minimal Pi model runtime supporting the protocol used by the selected
+  OpenCode Go model.
 
 ## 4. Core Domain Model
 
@@ -206,6 +244,38 @@ Fields:
 - `inactivity_timeout_ms` (current effective value)
 - `poll_interval_ms` (current effective value)
 
+#### 4.1.6 Detected Conversation Source
+
+Description of the microphone-owning process used only to decide whether a
+recording may start.
+
+Fields:
+
+- `bundle_id` (string or null)
+- `display_name` (string or null)
+- `visible_window_title` (string or null)
+- `classification` (enum)
+  * `automatic_meeting` | `confirmation_required` | `excluded`
+- `meeting_kind` (enum or null)
+  * `zoom` | `teams` | `google_meet`
+
+#### 4.1.7 Assistant Conversation
+
+Ephemeral AI state scoped to one recording session.
+
+Fields:
+
+- `session_id` (string)
+- `provider` (constant string)
+  * MUST equal `opencode-go`.
+- `model_id` (string)
+  * MUST identify a model exposed by OpenCode Go.
+- `messages` (list)
+  * User questions and assistant answers for this session only.
+- `summary` (string or null)
+- `status` (enum)
+  * `unconfigured` | `ready` | `responding` | `summarizing` | `failed`
+
 ### 4.2 Identifiers and Normalization Rules
 
 - `Session ID`
@@ -217,6 +287,9 @@ Fields:
     character MUST be replaced with `_`.
 - `Segment offset`
   * Time relative to session start, not wall-clock time.
+- `Assistant conversation lifetime`
+  * Scoped to one recording session. Context from another transcript MUST NOT be
+    included implicitly.
 
 ## 5. Call Detection
 
@@ -224,18 +297,47 @@ Fields:
 
 - Detection MUST be based on the operating system signal indicating the microphone
   is in use by any process.
-- Detection MUST NOT depend on identifying a specific application (detection is
-  agnostic to the video-call app).
 - The signal MUST be polled on a fixed cadence defined by `poll_interval_ms`.
+- When process attribution is available, the detector MUST attach the owning
+  application's bundle identifier and display name.
+- Browser-hosted meetings SHOULD additionally use visible-window metadata to
+  distinguish a Google Meet conversation from unrelated browser microphone use.
+- Source inspection MUST NOT read page content, messages, or captured audio.
 
-### 5.2 Session Start
+### 5.2 Source Classification
 
-- When the microphone-in-use signal becomes active and no session is in progress,
-  the orchestrator MUST start a new session.
+- Sustained microphone activity from Zoom or Microsoft Teams MUST be classified
+  as `automatic_meeting`.
+- Sustained microphone activity from a browser or PWA MUST be classified as
+  `automatic_meeting` only when a visible Google Meet window can be identified.
+- WhatsApp MUST be classified as `confirmation_required`. Recording a WhatsApp
+  voice note MUST NOT start a session automatically.
+- All other non-excluded applications and activity without reliable process
+  attribution MUST be classified as `confirmation_required`.
+- Configured exclusions, operating-system speech helpers, the capture daemon, and
+  this application itself MUST be classified as `excluded` and MUST NOT prompt or
+  start a recording.
+- If one active source is an `automatic_meeting`, the automatic classification
+  takes precedence over concurrent ambiguous sources.
+
+### 5.3 Session Start
+
+- A source MUST remain active for the implementation's documented confirmation
+  window before it can start or prompt for a session. Brief microphone blips MUST
+  be discarded.
+- When an `automatic_meeting` source confirms and no session is in progress, the
+  orchestrator MUST start a new session automatically.
+- When a `confirmation_required` source confirms, the service MUST show a compact
+  prompt identifying the likely source and asking whether to record.
+- Capture, transcription, and transcript creation MUST NOT begin until the user
+  accepts that prompt.
+- Declining or dismissing the prompt MUST suppress further prompts for the same
+  continuous microphone-use episode. Suppression MUST reset after the microphone
+  is released.
 - On start, the service MUST open audio capture, show the caption surface, update
   the status surface, and trigger a notification.
 
-### 5.3 Session End
+### 5.4 Session End
 
 - A session MUST end when any of the following occurs:
   * The microphone-in-use signal becomes inactive in a sustained manner.
@@ -253,6 +355,9 @@ The orchestrator is the only component that mutates session state.
 1. `Idle`
 
   - No active session. The service observes the detection signal.
+  - An optional pending-confirmation substate records that sustained ambiguous
+    microphone activity was detected and the service is asking the user whether
+    to record. No Recording Session exists and capture has not started.
 
 2. `Detected`
 
@@ -276,7 +381,13 @@ The orchestrator is the only component that mutates session state.
 
 ### 6.2 Transitions
 
-- `Idle -> Detected`: the microphone-in-use signal becomes active.
+- `Idle -> Detected`: a confirmed `automatic_meeting` source becomes active.
+- `Idle (observing) -> Idle (confirmation pending)`: a confirmed
+  `confirmation_required` source becomes active.
+- `Idle (confirmation pending) -> Detected`: the user accepts recording while
+  the source remains active.
+- `Idle (confirmation pending) -> Idle (observing or suppressed)`: the user
+  declines/dismisses, or the microphone is released before acceptance.
 - `Detected -> Recording`: capture and engine initialized successfully.
 - `Detected -> Failed`: capture or engine could not be initialized.
 - `Recording -> Finalizing`: end by inactivity, manual stop, or system signal.
@@ -290,6 +401,8 @@ The orchestrator is the only component that mutates session state.
 - The orchestrator MUST guarantee at most one active session at a time.
 - A transition to `Detected` MUST NOT occur while a session is in `Recording` or
   `Finalizing`.
+- A declined source episode MUST NOT produce repeated confirmation prompts until
+  microphone release.
 
 ## 7. Audio Capture
 
@@ -385,7 +498,7 @@ The document MUST be Markdown with the following structure:
 - The automatic file name MUST be composed of the start time and duration:
   `HH-MM_<duration>.md`.
 - Renaming by content is NOT the application's responsibility; it is delegated to
-  external tools (see §13).
+  external tools (see Appendix B).
 - The name MUST be sanitized per §4.2.
 
 ### 9.4 Incremental Writing
@@ -434,8 +547,10 @@ operation starts.
 - `language` (string)
   * Default: the user's primary language; MAY be `auto`.
 - `engine` (enum)
-  * `default` | `native`
+  * `default` | `sherpa` | `native`
   * Default: `default`.
+- `speech_model` (string)
+  * Catalog model used when `engine = sherpa`.
 - `inactivity_timeout_ms` (integer)
   * Default: `900000` (15 minutes).
 - `poll_interval_ms` (integer)
@@ -444,39 +559,110 @@ operation starts.
 Implementations MUST document any additional implementation-defined values (for
 example, audio level threshold or buffer size).
 
+The selected OpenCode Go model MAY be stored as an application preference. The
+OpenCode Go API key MUST NOT be represented by this configuration layer or
+accepted from its JSON file; it belongs exclusively in the credential store.
+
 ## 12. Privacy and Safety
 
-- Audio MUST be processed locally; the service MUST NOT send audio or transcripts to
-  remote services in v1.
+- Audio MUST be processed locally and MUST NOT be sent to the conversation
+  assistant or any other remote service.
+- The service MAY send transcript text, the user's questions, and bounded
+  in-session assistant context to OpenCode Go only as specified in §13.
+- When the configured assistant generates the end-of-conversation summary, the
+  service MUST send the finalized transcript text, not captured audio.
+- The UI MUST make the local-audio/remote-text boundary clear before the first
+  assistant request is made.
 - The service MUST request the necessary operating system permissions on first run
   and operate only after they are granted.
 - Transcripts are stored as plain text in `output_dir`; the implementation SHOULD
   document this location so the user can control its confidentiality.
+- Provider-side handling and retention MAY vary by OpenCode Go model; the model
+  selection UI SHOULD expose or link to the applicable policy when available.
 
-## 13. External Reading and Q&A (Boundary)
+## 13. Integrated Conversation Assistant
 
-- The service does not provide Q&A or AI chat.
-- Transcripts reside in `output_dir` in Markdown.
-- The user MAY point an external AI tool with filesystem access at `output_dir` for
-  analysis or content-based renaming.
-- Any such integration is outside the v1 conformance scope.
+### 13.1 Provider and Runtime Boundary
 
-## 14. Reference Algorithms (Implementation-Agnostic)
+- Every assistant request MUST use the provider identifier `opencode-go`.
+- Models MUST be selected from the catalog exposed by OpenCode Go. The
+  implementation MUST NOT silently route through Codex, a direct OpenAI API, or
+  another provider.
+- The application MUST use Pi only as a minimal, request-scoped model runtime.
+- The Pi runtime MUST expose no shell, filesystem, code-editing, web, or other
+  agent tools.
+- The application MUST pass transcript text directly to the runtime. It MUST NOT
+  ask the runtime to discover or read the Markdown path.
+
+### 13.2 Credentials
+
+- The OpenCode Go API key MUST be stored in the macOS Keychain.
+- The key MUST NOT be written to `config.json`, transcripts, logs, analytics, or
+  process arguments. It MAY be injected into the isolated Pi child process as a
+  transient provider environment value and MUST NOT outlive that one-shot
+  request.
+- If the key is missing, recording and local transcription MUST remain available;
+  the assistant UI MUST explain how to configure it.
+
+### 13.3 Live Conversation Q&A
+
+- The conversation workspace MUST allow the user to submit questions while a
+  recording is active.
+- Each request MUST be grounded in the latest available final transcript text.
+  It MAY additionally include the current partial hypothesis, clearly identified
+  as provisional.
+- Assistant chat history MUST be scoped to the current session and bounded to
+  prevent unbounded request growth.
+- Each request runs Pi in one-shot mode. The workspace MUST show request progress
+  and present the complete response when that process finishes.
+- An assistant request failure MUST be shown without stopping recording,
+  transcription, or incremental transcript persistence.
+
+### 13.4 End-of-Conversation Summary
+
+- After the transcript is finalized, a configured assistant MUST automatically
+  request a summary from the selected OpenCode Go model.
+- The summary SHOULD prioritize decisions, action items, owners, dates, unresolved
+  questions, and the most important context actually present in the transcript.
+- The generated summary MUST be presented in the conversation workspace's
+  Summary view.
+- Summary generation MUST occur after transcript finalization so it receives the
+  complete set of final segments.
+- Summary failure MUST NOT alter the recording's `Saved` state and MUST remain
+  visible in the Summary view.
+
+## 14. Reference Algorithms
 
 ### 14.1 Detection Loop
 
 ```
 on_tick(state):
-  mic_active = os_microphone_in_use()
+  sample = inspect_microphone_activity()
 
-  if state.session_status == Idle and mic_active:
-    state = begin_session(state)
-    return state
+  if state.session_status == Idle and sample.sustained and not detection.pending_prompt:
+    decision = classify_source(sample)
+    if decision == automatic_meeting:
+      return begin_session(state)
+    if decision == confirmation_required and not detection.suppressed_episode:
+      show_recording_prompt(sample.source)
+      detection.pending_prompt = sample.source
+      return state
+
+  if state.session_status == Idle and detection.pending_prompt:
+    if user_accepted() and sample.active:
+      return begin_session(state)
+    if user_declined() or not sample.active:
+      detection.pending_prompt = null
+      detection.suppressed_episode = sample.active
+      return state
 
   if state.session_status == Recording:
-    if not mic_active or inactivity_elapsed(state):
+    if not sample.active or inactivity_elapsed(state):
       state = finalize_session(state, reason = inactivity_or_signal)
       return state
+
+  if not sample.active:
+    detection.suppressed_episode = false
 
   schedule_tick(state.poll_interval_ms)
   return state
@@ -539,6 +725,7 @@ function finalize_session(state, reason):
   state.current_session.ended_at = now_local()
   state.current_session.end_reason = reason
   state.session_status = Saved
+  request_summary_async(final_transcript_text)  # opencode-go; cannot change Saved
   set_status(Idle)
   state.current_session = null
   return state
@@ -558,7 +745,14 @@ Validation profiles:
 
 ### 15.1 Detection and State
 
-- `Idle -> Detected` occurs when the microphone signal becomes active.
+- A confirmed Zoom or Teams source takes `Idle -> Detected` automatically.
+- A browser source takes `Idle -> Detected` automatically only when visible
+  Google Meet metadata is present.
+- WhatsApp, other browser use, unknown applications, and unattributed activity
+  keep the session `Idle` with a pending confirmation and do not open capture
+  before acceptance.
+- Declining a prompt suppresses another prompt until microphone release.
+- Excluded sources neither start nor prompt.
 - A second session is not started while one is in `Recording`.
 - Sustained inactivity ends the session with `end_reason = inactivity`.
 - Manual stop ends the session with `end_reason = manual`.
@@ -588,6 +782,10 @@ Validation profiles:
 - The caption surface shows on start and hides on finalization.
 - The status surface reflects the current session state.
 - A notification is triggered when a call is detected and started.
+- Ambiguous activity presents a source-labeled accept/decline prompt without
+  creating a transcript.
+- The main workspace presents live transcript and chat concurrently, then exposes
+  the generated summary.
 
 ### 15.6 Failures
 
@@ -602,17 +800,36 @@ Validation profiles:
 - Verification of operating system permissions in the target environment.
 - A skipped integration test SHOULD be reported as skipped, not as passed.
 
+### 15.8 Conversation Assistant
+
+- Every model request resolves to provider `opencode-go`; unsupported providers
+  are rejected rather than used as fallbacks.
+- The Pi runtime is launched without tools and receives transcript text, not a
+  filesystem path.
+- The API key round-trips through Keychain storage and is absent from logs,
+  application configuration, transcript files, and process arguments; any Pi
+  child-process environment value is request-scoped.
+- A live question includes the latest available transcript text and session-only
+  chat context.
+- Summary generation begins only after transcript finalization.
+- Missing credentials and request failures leave capture, persistence, and the
+  recording's terminal `Saved` state intact.
+
 ## 16. Implementation Checklist (Definition of Done)
 
 ### 16.1 REQUIRED for Conformance
 
 - Call detector based on the operating system's microphone-in-use signal.
+- Source-aware start policy: automatic for Zoom, Teams, and visible Google Meet;
+  user confirmation for WhatsApp, ambiguous, and unknown activity.
 - Orchestrator with a single authoritative state and the state machine of §6.
 - Simultaneous capture of system audio and microphone.
 - Inactivity detection with `inactivity_timeout_ms`.
 - Swappable transcription engine with the contract of §8.
 - Default transcription engine that is portable and open source.
 - Live captions (partial and final segments).
+- Live conversation workspace with transcript, OpenCode Go chat, and final
+  summary.
 - Menu bar status surface with manual control.
 - Notification when a call is detected and started.
 - Markdown writing with the structure of §9.1.
@@ -620,11 +837,13 @@ Validation profiles:
 - Incremental persistence of final segments.
 - Failure handling per §10 without silent loss.
 - Typed configuration layer with defaults and pre-operation validation.
+- Minimal tool-free Pi runtime restricted to `opencode-go` models.
+- OpenCode Go API-key storage in macOS Keychain.
+- Assistant failures isolated from recording and persistence correctness.
 
 ### 16.2 RECOMMENDED Extensions (Not REQUIRED for Conformance)
 
 - Native operating system transcription engine as an option (`engine = native`).
-- Live reading UI beyond the floating captions (see Appendix A).
 - External-tool-assisted file renaming (outside the app).
 - TODO: speaker identification (diarization).
 - TODO: export to additional formats.
@@ -634,23 +853,24 @@ Validation profiles:
 - Run the Real Integration Profile of §15.7 with a real call.
 - Verify permission behavior in the target environment.
 
-## Appendix A. Live Reading UI (OPTIONAL)
+## Appendix A. Conversation Workspace
 
-This appendix describes an OPTIONAL extension providing a richer reading view than
-the floating caption surface.
+The main window provides the richer reading and assistant experience while the
+floating caption surface remains independently hideable.
 
-- The reading UI is an extension and is NOT REQUIRED for conformance.
 - It MUST be driven solely from the orchestrator's segment stream.
 - It MUST NOT become a requirement for capture or persistence correctness.
-- It MAY present the current session's history with auto-scroll.
+- It MUST present current-session history with follow-mode auto-scroll that can be
+  paused when the user reads earlier text.
+- It MUST keep transcript and assistant panes usable at the same time during an
+  active conversation.
+- It MUST expose distinct Chat and Summary views and identify the selected model
+  as an OpenCode Go model.
 
-## Appendix B. External Q&A Integration (OPTIONAL)
+## Appendix B. External Transcript Use
 
-This appendix describes the intended pattern for AI analysis, which lives outside the
-application.
-
-- The application exposes transcripts as Markdown files in `output_dir`.
-- An external AI tool with filesystem access MAY be pointed at `output_dir` to answer
-  questions or rename by content.
-- This integration is NOT part of the v1 conformance scope and MUST NOT introduce
-  network dependencies inside the application.
+- The application continues to expose transcripts as Markdown files in
+  `output_dir`.
+- Users MAY process those files with external tools, but external tools are not
+  required for the built-in Q&A and summary flow.
+- Content-based file renaming remains outside v2 conformance scope.
