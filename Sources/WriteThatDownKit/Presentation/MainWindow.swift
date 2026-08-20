@@ -14,6 +14,7 @@ public final class MainWindowController {
     private let statusModel: StatusModel
     private let captionModel: CaptionModel
     private let workspaceModel: ConversationWorkspaceModel
+    private let dictationModel: DictationSettingsModel
     private let conversationLibrary: ConversationLibraryModel
     private var window: NSWindow?
 
@@ -36,6 +37,9 @@ public final class MainWindowController {
     var onSubmitAuthPrompt: (String) -> Void = { _ in }
     var onCancelAuth: () -> Void = {}
     var onRefreshAssistantProviders: () -> Void = {}
+    var onSetDictationEnabled: (Bool) -> Void = { _ in }
+    var onRequestDictationAccessibility: () -> Void = {}
+    var onOpenAccessibilitySettings: () -> Void = {}
     var onSelectConversation: (String?) -> Void = { _ in }
     var onRefreshConversations: () -> Void = {}
     var onGenerateSelectedSummary: () -> Void = {}
@@ -45,11 +49,13 @@ public final class MainWindowController {
         statusModel: StatusModel,
         captionModel: CaptionModel,
         workspaceModel: ConversationWorkspaceModel = ConversationWorkspaceModel(),
+        dictationModel: DictationSettingsModel = DictationSettingsModel(),
         conversationLibrary: ConversationLibraryModel
     ) {
         self.statusModel = statusModel
         self.captionModel = captionModel
         self.workspaceModel = workspaceModel
+        self.dictationModel = dictationModel
         self.conversationLibrary = conversationLibrary
     }
 
@@ -72,6 +78,7 @@ public final class MainWindowController {
                 statusModel: statusModel,
                 captionModel: captionModel,
                 workspaceModel: workspaceModel,
+                dictationModel: dictationModel,
                 conversationLibrary: conversationLibrary,
                 onStop: { [weak self] in self?.onStop() },
                 onOpenFolder: { [weak self] in self?.onOpenFolder() },
@@ -86,6 +93,9 @@ public final class MainWindowController {
                 onSubmitAuthPrompt: { [weak self] value in self?.onSubmitAuthPrompt(value) },
                 onCancelAuth: { [weak self] in self?.onCancelAuth() },
                 onRefreshAssistantProviders: { [weak self] in self?.onRefreshAssistantProviders() },
+                onSetDictationEnabled: { [weak self] enabled in self?.onSetDictationEnabled(enabled) },
+                onRequestDictationAccessibility: { [weak self] in self?.onRequestDictationAccessibility() },
+                onOpenAccessibilitySettings: { [weak self] in self?.onOpenAccessibilitySettings() },
                 onSelectConversation: { [weak self] id in self?.onSelectConversation(id) },
                 onRefreshConversations: { [weak self] in self?.onRefreshConversations() },
                 onGenerateSelectedSummary: { [weak self] in self?.onGenerateSelectedSummary() },
@@ -126,6 +136,7 @@ private struct MainWindowView: View {
     @ObservedObject var statusModel: StatusModel
     @ObservedObject var captionModel: CaptionModel
     @ObservedObject var workspaceModel: ConversationWorkspaceModel
+    @ObservedObject var dictationModel: DictationSettingsModel
     @ObservedObject var conversationLibrary: ConversationLibraryModel
     var onStop: () -> Void
     var onOpenFolder: () -> Void
@@ -140,6 +151,9 @@ private struct MainWindowView: View {
     var onSubmitAuthPrompt: (String) -> Void
     var onCancelAuth: () -> Void
     var onRefreshAssistantProviders: () -> Void
+    var onSetDictationEnabled: (Bool) -> Void
+    var onRequestDictationAccessibility: () -> Void
+    var onOpenAccessibilitySettings: () -> Void
     var onSelectConversation: (String?) -> Void
     var onRefreshConversations: () -> Void
     var onGenerateSelectedSummary: () -> Void
@@ -195,12 +209,16 @@ private struct MainWindowView: View {
             ApplicationSettingsSheet(
                 workspace: selectedWorkspace,
                 statusModel: statusModel,
+                dictationModel: dictationModel,
                 onSelectProvider: onSelectAssistantProvider,
                 onConnectProvider: onConnectAssistantProvider,
                 onDisconnectProvider: onDisconnectAssistantProvider,
                 onSubmitAuthPrompt: onSubmitAuthPrompt,
                 onCancelAuth: onCancelAuth,
                 onRefreshProviders: onRefreshAssistantProviders,
+                onSetDictationEnabled: onSetDictationEnabled,
+                onRequestDictationAccessibility: onRequestDictationAccessibility,
+                onOpenAccessibilitySettings: onOpenAccessibilitySettings,
                 onSelectEngine: onSelectEngineOption,
                 onDownloadEngine: onDownloadEngineOption,
                 onDeleteEngine: onDeleteEngineOption
@@ -1095,12 +1113,16 @@ private struct ApplicationSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var workspace: ConversationWorkspaceModel
     @ObservedObject var statusModel: StatusModel
+    @ObservedObject var dictationModel: DictationSettingsModel
     let onSelectProvider: (String) -> Void
     let onConnectProvider: (String, PiProviderAuthMethod.Kind) -> Void
     let onDisconnectProvider: (String) -> Void
     let onSubmitAuthPrompt: (String) -> Void
     let onCancelAuth: () -> Void
     let onRefreshProviders: () -> Void
+    let onSetDictationEnabled: (Bool) -> Void
+    let onRequestDictationAccessibility: () -> Void
+    let onOpenAccessibilitySettings: () -> Void
     let onSelectEngine: (String) -> Void
     let onDownloadEngine: (String) -> Void
     let onDeleteEngine: (String) -> Void
@@ -1133,12 +1155,24 @@ private struct ApplicationSettingsSheet: View {
 
                 TranscriptionSettingsView(
                     model: statusModel,
+                    dictationModel: dictationModel,
                     onSelect: onSelectEngine,
                     onDownload: onDownloadEngine,
                     onDelete: onDeleteEngine
                 )
                 .tabItem {
                     Label(conversationLanguage.text("Transcription", spanish: "Transcripción"), systemImage: "waveform")
+                }
+
+                DictationSettingsView(
+                    model: dictationModel,
+                    statusModel: statusModel,
+                    onSetEnabled: onSetDictationEnabled,
+                    onRequestAccessibility: onRequestDictationAccessibility,
+                    onOpenAccessibilitySettings: onOpenAccessibilitySettings
+                )
+                .tabItem {
+                    Label(conversationLanguage.text("Dictation", spanish: "Dictado"), systemImage: "mic.badge.plus")
                 }
             }
             .padding(16)
@@ -1346,6 +1380,7 @@ private struct ProviderSettingsView: View {
 
 private struct TranscriptionSettingsView: View {
     @ObservedObject var model: StatusModel
+    @ObservedObject var dictationModel: DictationSettingsModel
     let onSelect: (String) -> Void
     let onDownload: (String) -> Void
     let onDelete: (String) -> Void
@@ -1375,16 +1410,20 @@ private struct TranscriptionSettingsView: View {
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if model.installState(for: option).isReady && model.canChangeEngine { onSelect(option.id) }
+                    if model.installState(for: option).isReady && canChangeEngine { onSelect(option.id) }
                 }
                 .padding(.vertical, 5)
             }
             .listStyle(.inset)
 
-            if !model.canChangeEngine {
+            if !canChangeEngine {
                 Label(conversationLanguage.text(
-                    "Finish the current recording before changing engines.",
-                    spanish: "Termina la grabación actual antes de cambiar de motor."
+                    dictationModel.phase.isBusy
+                        ? "Finish the current dictation before changing engines."
+                        : "Finish the current recording before changing engines.",
+                    spanish: dictationModel.phase.isBusy
+                        ? "Termina el dictado actual antes de cambiar de motor."
+                        : "Termina la grabación actual antes de cambiar de motor."
                 ), systemImage: "info.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1393,13 +1432,17 @@ private struct TranscriptionSettingsView: View {
         .padding(20)
     }
 
+    private var canChangeEngine: Bool {
+        model.canChangeEngine && !dictationModel.phase.isBusy
+    }
+
     @ViewBuilder
     private func engineAction(_ option: TranscriptionEngineOption) -> some View {
         let state = model.installState(for: option)
         switch state {
         case .notDownloaded:
             Button(conversationLanguage.text("Download", spanish: "Descargar")) { onDownload(option.id) }
-                .disabled(!model.canChangeEngine)
+                .disabled(!canChangeEngine)
         case let .downloading(progress):
             ProgressView(value: progress).frame(width: 90)
         case .failed:
@@ -1414,6 +1457,137 @@ private struct TranscriptionSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+private struct DictationSettingsView: View {
+    @ObservedObject var model: DictationSettingsModel
+    @ObservedObject var statusModel: StatusModel
+    let onSetEnabled: (Bool) -> Void
+    let onRequestAccessibility: () -> Void
+    let onOpenAccessibilitySettings: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(conversationLanguage.text("Global local dictation", spanish: "Dictado local global"))
+                        .font(.title2.weight(.semibold))
+                    Text(conversationLanguage.text(
+                        "Speak into any text field without sending audio or text to an AI provider.",
+                        spanish: "Habla en cualquier campo de texto sin enviar audio ni texto a un proveedor de IA."
+                    ))
+                    .foregroundStyle(.secondary)
+                }
+
+                Toggle(isOn: Binding(
+                    get: { model.isEnabled },
+                    set: { value in onSetEnabled(value) }
+                )) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(conversationLanguage.text("Enable ⌘E dictation", spanish: "Activar dictado con ⌘E"))
+                            .font(.headline)
+                        Text(conversationLanguage.text(
+                            "Press once to listen. Press again to transcribe and insert.",
+                            spanish: "Presiona una vez para escuchar. Presiona de nuevo para transcribir e insertar."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                HStack(spacing: 14) {
+                    keycap("⌘")
+                    Text("+").foregroundStyle(.secondary)
+                    keycap("E")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(conversationLanguage.text("Global shortcut", spanish: "Atajo global"))
+                            .font(.headline)
+                        Text(conversationLanguage.text(
+                            "Works while another app has keyboard focus.",
+                            spanish: "Funciona mientras otra app tiene el foco del teclado."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(
+                        model.accessibilityGranted
+                            ? conversationLanguage.text("Accessibility access granted", spanish: "Acceso de Accesibilidad concedido")
+                            : conversationLanguage.text("Accessibility access required", spanish: "Se requiere acceso de Accesibilidad"),
+                        systemImage: model.accessibilityGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    )
+                    .font(.headline)
+                    .foregroundStyle(model.accessibilityGranted ? .green : .orange)
+
+                    Text(conversationLanguage.text(
+                        "Accessibility is used only to place the local transcript in the text field selected when dictation starts.",
+                        spanish: "Accesibilidad se usa únicamente para colocar la transcripción local en el campo seleccionado al iniciar el dictado."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    if model.isEnabled && !model.accessibilityGranted {
+                        HStack {
+                            Button(conversationLanguage.text("Request access", spanish: "Solicitar acceso"), action: onRequestAccessibility)
+                                .buttonStyle(.borderedProminent)
+                            Button(conversationLanguage.text("Open System Settings", spanish: "Abrir Configuración del Sistema"), action: onOpenAccessibilitySettings)
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(conversationLanguage.text("Local transcription model", spanish: "Modelo de transcripción local"))
+                        .font(.headline)
+                    HStack {
+                        Image(systemName: "cpu")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(statusModel.selectedEngineOption?.title ?? statusModel.modelName)
+                            Text(conversationLanguage.text(
+                                "Change it in the Transcription tab. Dictation always follows that selection.",
+                                spanish: "Cámbialo en la pestaña Transcripción. El dictado siempre usa esa selección."
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if let error = model.errorMessage, !error.isEmpty {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                }
+
+                Text(conversationLanguage.text(
+                    "Dictation is unavailable during a meeting recording. It captures microphone audio only, keeps it in memory, and never creates a conversation or transcript file.",
+                    spanish: "El dictado no está disponible durante una grabación. Captura sólo el micrófono, conserva el audio en memoria y nunca crea una conversación ni un archivo de transcripción."
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func keycap(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 17, weight: .semibold, design: .rounded))
+            .frame(width: 42, height: 36)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)) }
     }
 }
 

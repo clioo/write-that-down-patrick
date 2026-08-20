@@ -15,6 +15,7 @@ final class AppEnvironment {
     private let permissions: SystemPermissionManager
     private let detector: CallDetector
     private let orchestrator: SessionOrchestrator
+    private let dictationController: GlobalDictationController
     private let availableEngineOptions: [TranscriptionEngineOption]
     private let engineSelectionStore: EngineSelectionStore
     private let modelStore: SpeechModelStore
@@ -51,14 +52,15 @@ final class AppEnvironment {
         self.permissions = SystemPermissionManager(requiresSpeech: {
             selectionStore.current.engine == .native
         })
-        self.presenter = PresentationCoordinator(outputDir: config.outputDir)
+        let presenter = PresentationCoordinator(outputDir: config.outputDir)
+        self.presenter = presenter
         self.detector = CallDetector(
             pollIntervalMs: config.pollIntervalMs,
             excludedBundleIDs: config.excludedBundleIDs
         )
 
         let cfg = config
-        self.orchestrator = SessionOrchestrator(
+        let orchestrator = SessionOrchestrator(
             config: cfg,
             detector: detector,
             makeCapturer: { AudioCapturer(config: cfg) },
@@ -67,6 +69,26 @@ final class AppEnvironment {
             engineSelection: { selectionStore.current },
             presenter: presenter,
             permissions: permissions
+        )
+        self.orchestrator = orchestrator
+        self.dictationController = GlobalDictationController(
+            config: cfg,
+            selectedOption: { selectionStore.current },
+            makeEngine: { kind in EngineFactory.make(kind, language: cfg.language) },
+            meetingIsActive: {
+                let status = await orchestrator.snapshot().sessionStatus
+                return status == .detected || status == .recording || status == .finalizing
+            },
+            onSnapshot: { snapshot in
+                presenter.updateDictation(
+                    enabled: snapshot.isEnabled,
+                    accessibilityGranted: snapshot.accessibilityGranted,
+                    phase: snapshot.phase,
+                    targetApplicationName: snapshot.targetApplicationName,
+                    engineName: snapshot.engineName,
+                    errorMessage: snapshot.errorMessage
+                )
+            }
         )
 
         Log.app.notice("Configured: engine=\(selectedOption.engine.rawValue, privacy: .public), option=\(selectedOption.title, privacy: .public), outputDir=\(cfg.outputDir.path, privacy: .public).")
@@ -80,10 +102,14 @@ final class AppEnvironment {
         // Stop/Quit actions must work the instant the icon appears, even while
         // a permission prompt is stalled unanswered.
         let orchestrator = self.orchestrator
+        let dictationController = self.dictationController
         presenter.onManualStop = { orchestrator.requestManualStop() }
         presenter.onAcceptRecordingPrompt = { id in orchestrator.acceptRecordingPrompt(id) }
         presenter.onDeclineRecordingPrompt = { id in orchestrator.declineRecordingPrompt(id) }
-        presenter.onQuit = { orchestrator.requestShutdown() }
+        presenter.onQuit = {
+            dictationController.shutdown()
+            orchestrator.requestShutdown()
+        }
         presenter.onSelectEngineOption = { [weak self] id in
             Task { await self?.selectEngineOption(id) }
         }
@@ -93,6 +119,15 @@ final class AppEnvironment {
         presenter.onDeleteEngineOption = { [weak self] id in
             self?.deleteEngineOption(id)
         }
+        presenter.onSetDictationEnabled = { enabled in
+            dictationController.setEnabled(enabled)
+        }
+        presenter.onRequestDictationAccessibility = {
+            dictationController.requestAccessibilityPermission()
+        }
+        presenter.onOpenAccessibilitySettings = {
+            dictationController.openAccessibilitySettings()
+        }
         presenter.setEngineOptions(
             availableEngineOptions,
             selectedID: engineSelectionStore.current.id,
@@ -101,6 +136,9 @@ final class AppEnvironment {
         if availableEngineOptions.isEmpty {
             presenter.updateSelectedEngineOption(engineSelectionStore.current, resetHealth: false)
         }
+        dictationController.install(
+            enabled: UserDefaults.standard.bool(forKey: GlobalDictationController.enabledDefaultsKey)
+        )
         await presenter.install()
         // The app is not menu-bar-only: show the dashboard window on launch
         // (and AppDelegate re-shows it when the user re-opens the app).
@@ -115,6 +153,7 @@ final class AppEnvironment {
 
     /// Re-shows the dashboard window (user re-opened the app while running).
     func showMainWindow() {
+        dictationController.refreshAccessibilityStatus()
         presenter.showMainWindow()
     }
 
