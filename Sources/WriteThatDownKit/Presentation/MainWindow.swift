@@ -195,7 +195,7 @@ private struct MainWindowView: View {
                         onSelectAssistantModel(id)
                     },
                     onConfigure: { settingsSheetShown = true },
-                    canGenerateSummary: conversationLibrary.selectedConversation != nil,
+                    canGenerateSummary: selectedWorkspace.phase == .finished && !displayedSegments.isEmpty,
                     onGenerateSummary: onGenerateSelectedSummary
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1075,7 +1075,16 @@ private struct ConversationSummaryView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
                     .frame(maxWidth: 340)
+                if canGenerateSummary && model.phase == .finished {
+                    Button(
+                        conversationLanguage.text("Retry with selected model", spanish: "Reintentar con el modelo seleccionado"),
+                        action: onGenerateSummary
+                    )
+                    .buttonStyle(.borderedProminent)
+                    .tint(ConversationPalette.accent)
+                }
             }
         }
     }
@@ -1345,9 +1354,34 @@ private struct ProviderSettingsView: View {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text(workspace.authStatusMessage ?? conversationLanguage.text("Signing in…", spanish: "Iniciando sesión…"))
+                    .textSelection(.enabled)
+            }
+            if let code = workspace.authDeviceCode {
+                VStack(alignment: .leading, spacing: 9) {
+                    Text(code)
+                        .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                        .textSelection(.enabled)
+                    HStack {
+                        Button(conversationLanguage.text("Copy code", spanish: "Copiar código")) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(code, forType: .string)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        if let verificationURL = workspace.authVerificationURL {
+                            Link(
+                                conversationLanguage.text("Open verification page", spanish: "Abrir página de verificación"),
+                                destination: verificationURL
+                            )
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
             if let prompt = workspace.pendingAuthPrompt {
-                Text(prompt.message).font(.callout)
+                Text(prompt.message)
+                    .font(.callout)
+                    .textSelection(.enabled)
                 if prompt.kind == .select {
                     ForEach(prompt.options) { option in
                         Button(option.label) { onSubmitAuthPrompt(option.id) }

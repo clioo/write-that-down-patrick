@@ -87,6 +87,17 @@ final class ConversationWorkspaceModelTests: XCTestCase {
     }
 
     @MainActor
+    func testModelSelectionPrefersSupportedDefaultOverFirstCatalogEntry() {
+        let model = ConversationWorkspaceModel()
+        model.setAssistantModels([
+            .init(id: "gpt-5.3-codex-spark", title: "GPT-5.3 Codex Spark", detail: "OpenAI Codex"),
+            .init(id: "gpt-5.6-luna", title: "GPT-5.6 Luna", detail: "OpenAI Codex"),
+        ], selectedID: nil)
+
+        XCTAssertEqual(model.selectedAssistantModelID, "gpt-5.6-luna")
+    }
+
+    @MainActor
     func testProviderSelectionUpdatesConnectionAndModels() {
         let model = ConversationWorkspaceModel()
         let providers = [

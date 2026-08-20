@@ -633,6 +633,9 @@ accepted from its JSON file; they belong exclusively in the credential store.
 - The settings UI MUST expose every interactive authentication method declared
   by the installed Pi runtime, including multi-step prompts, OAuth browser
   flows, and device-code flows.
+- A completed browser OAuth callback MUST dismiss any optional manual-code
+  fallback without requiring the user to paste the redirect URL.
+- Device codes MUST be selectable text and MUST provide an explicit copy action.
 - If credentials are missing, recording and local transcription MUST remain
   available; the assistant UI MUST explain how to connect a provider.
 
